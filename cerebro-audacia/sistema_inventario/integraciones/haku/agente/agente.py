@@ -45,7 +45,11 @@ from .planificador import (
     requiere_catalogo_almacenes_condicion_stock,
     requiere_catalogo_categorias_condicion_stock,
     _es_consulta_global_inventario,
+    _es_negacion_operacion,
+    _es_pregunta_como_operar,
+    _es_pregunta_permiso_capacidad,
     _es_pregunta_quien_tiene_prestamo,
+    _texto_respalda_accion_operativa,
     aclarar_agregado_sin_alcance_explicito,
     verificar_intencion_operativa_sin_entidad,
     normalizar_decision_intencion_operativa,
@@ -1321,9 +1325,12 @@ class AgenteInventarioHaku:
             and texto
             and "?" not in texto
             and "¿" not in texto
+            and not _es_pregunta_como_operar(texto)
+            and not _es_pregunta_permiso_capacidad(texto)
+            and not _es_negacion_operacion(texto)
             and not re.search(
-                r"\b(?:cu[aá]nt[oa]s?|cu[aá]l(?:es)?|qui[eé]n(?:es)?|d[oó]nde|"
-                r"qu[eé]\s+(?:hay|tenemos|productos|pr[eé]stamos|movimientos)|"
+                r"\b(?:cu[aá]nt[oa]s?|cu[aá]l(?:es)?|qui[eé]n(?:es)?|d[oó]nde|c[oó]mo|"
+                r"qu[eé]\s+(?:hay|tenemos|productos|pr[eé]stamos|movimientos|almacenes|bodegas|ubicaciones|categor[ií]as)|"
                 r"mu[eé]str\w*|ense[nñ]\w*|dime|ver\b|list[aeo]\w*|historial|reporte|consulta\w*|revisar|buscar)\b",
                 texto,
                 re.IGNORECASE,
@@ -1520,6 +1527,7 @@ class AgenteInventarioHaku:
                     categorias_catalogo=herramientas.nombres_categorias(),
                     almacenes_catalogo=herramientas.nombres_almacenes(),
                     ubicaciones_catalogo=herramientas.nombres_ubicaciones(),
+                    texto_usuario=texto,
                 )
 
             if metricas_verificacion:
@@ -1541,8 +1549,28 @@ class AgenteInventarioHaku:
                 "accion": accion,
                 "latencia_ms": round(float(metricas_verificacion.get("duracion_ms", 0.0) or 0.0), 1),
             }
-            accion_valida = accion in ACCIONES_VALIDAS
-            if decision and clase in {"operacion", "formulario"} and accion_valida:
+            accion_valida = accion in ACCIONES_VALIDAS and _texto_respalda_accion_operativa(texto, accion)
+            if _es_pregunta_como_operar(texto) or _es_pregunta_permiso_capacidad(texto):
+                plan.tipo = "capacidades"
+                plan.operacion = None
+                plan.accion = None
+                plan.filtros = FiltrosConsulta()
+                plan.campos = []
+                plan.referencia = "ninguna"
+                plan.fuente_plan = "guarda_capacidades_procedimiento"
+            elif _es_negacion_operacion(texto):
+                plan.tipo = "aclaracion"
+                plan.operacion = None
+                plan.accion = None
+                plan.filtros = FiltrosConsulta()
+                plan.campos = []
+                plan.referencia = "ninguna"
+                plan.pregunta = (
+                    "Entendido, no se realizará ninguna operación en el inventario. "
+                    "¿Desea consultar algún dato?"
+                )
+                plan.fuente_plan = "guarda_negacion_operacion"
+            elif decision and clase in {"operacion", "formulario"} and accion_valida:
                 def _entero_opcional(valor: Any, permitir_cero: bool = False) -> Optional[int]:
                     if isinstance(valor, bool) or not isinstance(valor, int):
                         return None
@@ -1973,7 +2001,22 @@ class AgenteInventarioHaku:
             }
 
         # Conteo o listado de ubicaciones accesibles cuando la consulta es general de ubicaciones
-        if plan.operacion in ("listar", "contar") and plan.campos == ["ubicacion"] and plan.filtros.vacio():
+        if (
+            plan.operacion in ("listar", "contar")
+            and plan.campos == ["ubicacion"]
+            and (
+                plan.filtros.vacio()
+                or (
+                    bool(plan.filtros.almacen)
+                    and not plan.filtros.codigos
+                    and not plan.filtros.texto
+                    and not plan.filtros.categoria
+                    and not plan.filtros.ubicacion
+                    and not plan.filtros.condicion
+                    and plan.filtros.es_prestable is None
+                )
+            )
+        ):
             if not herramientas.tiene_permiso("catalogo.ver", "infraestructura.ver"):
                 msg_p = "No cuentas con el permiso requerido (`catalogo.ver`) para consultar las ubicaciones del inventario."
                 msg_v = "No cuenta con permisos suficientes para consultar las ubicaciones del inventario."
@@ -1993,20 +2036,25 @@ class AgenteInventarioHaku:
                 .select_related("almacen")
                 .order_by("almacen__nombre", "nombre")
             )
+            almacen_filtro_ubi = plan.filtros.almacen
+            if almacen_filtro_ubi:
+                ubis_qs = ubis_qs.filter(almacen__nombre__iexact=almacen_filtro_ubi)
             ubis = [(u.nombre, u.almacen.nombre if u.almacen_id else "") for u in ubis_qs]
             traza["total_resultados"] = len(ubis)
+            sufijo_alm_p = f" en **{almacen_filtro_ubi}**" if almacen_filtro_ubi else " en los almacenes disponibles"
+            sufijo_alm_v = f" en {almacen_filtro_ubi}" if almacen_filtro_ubi else ""
             if ubis:
                 lineas_p = [f"- **{nom}** ({alm})" if alm else f"- **{nom}**" for nom, alm in ubis]
                 lineas_v = [f"{nom} en {alm}" if alm else nom for nom, alm in ubis]
                 if plan.operacion == "contar":
-                    pantalla = f"Hay **{len(ubis)} {'ubicación registrada' if len(ubis) == 1 else 'ubicaciones registradas'}**:\n\n" + "\n".join(lineas_p)
-                    verbal = f"Hay {len(ubis)} {'ubicación registrada' if len(ubis) == 1 else 'ubicaciones registradas'}: " + ", ".join(lineas_v[:8]) + "."
+                    pantalla = f"Hay **{len(ubis)} {'ubicación registrada' if len(ubis) == 1 else 'ubicaciones registradas'}**{sufijo_alm_p}:\n\n" + "\n".join(lineas_p)
+                    verbal = f"Hay {len(ubis)} {'ubicación registrada' if len(ubis) == 1 else 'ubicaciones registradas'}{sufijo_alm_v}: " + ", ".join(lineas_v[:8]) + "."
                 else:
-                    pantalla = "Las ubicaciones registradas en los almacenes disponibles son:\n\n" + "\n".join(lineas_p)
-                    verbal = "Las ubicaciones registradas son: " + ", ".join(lineas_v[:8]) + "."
+                    pantalla = f"Las ubicaciones registradas{sufijo_alm_p} son:\n\n" + "\n".join(lineas_p)
+                    verbal = f"Las ubicaciones registradas{sufijo_alm_v} son: " + ", ".join(lineas_v[:8]) + "."
             else:
-                pantalla = "No hay ubicaciones registradas en los almacenes disponibles."
-                verbal = pantalla
+                pantalla = f"No hay ubicaciones registradas{sufijo_alm_p}."
+                verbal = f"No hay ubicaciones registradas{sufijo_alm_v or ' en los almacenes disponibles'}."
             return {
                 "tipo": "consulta",
                 "mensaje_pantalla": pantalla,

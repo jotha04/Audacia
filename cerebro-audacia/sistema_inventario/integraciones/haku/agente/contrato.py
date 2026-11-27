@@ -898,7 +898,13 @@ def adaptar_plan_haku_a_intencion_resultado(plan: PlanHaku, usuario: Any = None)
             AccionMutacion.HABILITAR.value: IntencionTipo.HABILITAR_PRODUCTO,
             AccionMutacion.CAMBIAR_STOCK_MINIMO.value: IntencionTipo.EDITAR_PRODUCTO,
         }
-        tipo_int = mapa_mut.get(plan.accion, IntencionTipo.PRESTAMO)
+        tipo_int = mapa_mut.get(plan.accion)
+        if tipo_int is None:
+            return IntencionResultado(
+                tipo=IntencionTipo.SOLICITAR_ACLARACION,
+                mensaje_aclaracion="No pude identificar con precisión qué operación desea realizar. ¿Podría indicarla nuevamente?",
+                datos_extra=plan.to_dict(),
+            )
         return IntencionResultado(
             tipo=tipo_int,
             codigo_producto=mut.codigo,

@@ -160,7 +160,7 @@ Préstamo original=>evento. Para un producto, cantidad actual=stock; si también
 Estado: bajo_minimo=disponible positivo menor al mínimo; en_minimo=igual; cerca_minimo=por encima dentro del margen; agotado=cero; `requiere_reposicion`=agotados+bajo_minimo. Reposición/reabastecimiento es listado requiere_reposicion; no aclares ni confundas con préstamos. Interpreta el mensaje completo. Tono formal; solo JSON."""
 
 PROMPT_VERIFICADOR_INTENCION_OPERATIVA = """Clasifica la intención principal y extrae solo datos expresados. Devuelve exclusivamente el JSON del esquema. `clase` es `operacion` para un cambio solicitado, `formulario` para crear o editar registros, `consulta` para pedir información y `conversacion` para lo demás.
-Solicitar o pedir un préstamo para recibir o llevar temporalmente un artículo significa que se pide la operación `prestamo`, aunque se formule con cortesía, como pregunta o como deseo. También lo es dejar un artículo bajo custodia temporal de otra persona. Preguntar en general qué productos se pueden prestar, qué política aplica o cómo funciona el préstamo es `consulta`.
+Solicitar o pedir un préstamo para recibir o llevar temporalmente un artículo significa que se pide la operación `prestamo`, aunque se formule con cortesía, como pregunta o como deseo. También lo es dejar un artículo bajo custodia temporal de otra persona. Preguntar en general qué productos se pueden prestar, qué política aplica, cuáles son los almacenes o ubicaciones, qué requisitos pide una acción, cómo funciona o cómo se registra una operación, o negar una operación («no quiero...», «no hagas...», «no saques...») NO es `operacion`: usa `consulta` o `conversacion` y `accion: null`.
 `prestamo` entrega existencias a una persona para uso temporal; `devolucion` registra que un artículo prestado vuelve al inventario; `entrada` incorpora unidades; `salida` las retira sin préstamo; `traslado` cambia almacén o ubicación; `cambiar_stock_minimo` ajusta el umbral; `habilitar` e `inhabilitar` cambian el estado; `crear_producto` agrega un registro nuevo; `editar_producto` cambia uno existente. Si la persona pide que le devuelvan un artículo a ella, no lo clasifiques como retorno al inventario.
 Si `clase` es `formulario`, `accion` debe ser `crear_producto` o `editar_producto`, incluso si falta el nombre. Una solicitud de incorporar un producto al catálogo sigue siendo `crear_producto` aunque use un verbo equivalente a agregar o dar de alta y no incluya todavía nombre; la intención sigue siendo operativa aunque falten campos. No la conviertas en consulta ni fuera de dominio y no ejecutes nada sin confirmación.
 `producto` debe ser una entidad concreta; artículo, herramienta, material y otros nombres genéricos no identifican un producto y deben dejar `producto` nulo. `destinatario` es una persona; `destino` es almacén o ubicación. No inventes categorías, almacenes, ubicaciones, cantidades ni destinatarios. Deja los campos no expresados en `null`."""
@@ -171,7 +171,7 @@ ESQUEMA_VERIFICADOR_INTENCION_OPERATIVA = {
         "clase": {"type": "string", "enum": ["operacion", "formulario", "consulta", "conversacion"]},
         "accion": {
             "type": ["string", "null"],
-            "enum": ["prestamo", "devolucion", "entrada", "salida", "traslado", "cambiar_stock_minimo", "inhabilitar", "habilitar", "crear_producto", "editar_producto", None],
+            "enum": [None, "prestamo", "devolucion", "entrada", "salida", "traslado", "cambiar_stock_minimo", "inhabilitar", "habilitar", "crear_producto", "editar_producto"],
         },
         "producto": {"type": ["string", "null"]},
         "cantidad": {"type": ["integer", "null"]},
@@ -780,20 +780,272 @@ def _fecha_referencia_local() -> str:
         return datetime.date.today().isoformat()
 
 
+def _es_pregunta_como_operar(texto: str) -> bool:
+    """Detecta preguntas procedimentales («cómo registro una salida», «qué necesito para crear un producto»).
+
+    Estas preguntas solicitan explicación o guía de uso, nunca la ejecución de una
+    mutación de inventario ni están fuera de dominio.
+    """
+    original = (texto or "").strip()
+    if not original or extraer_codigos_de_texto(original):
+        return False
+    texto_norm = normalizar(preprocesar_texto_inventario(original, normalizar_medidas=False)).strip(" ¿?¡!.,;:")
+    if not texto_norm:
+        return False
+    sin_pref = re.sub(
+        r"^(?:(?:hola|hacu|haku|jacu|oye|por\s+favor|dime|digame|decime|expliqueme|explicame)\s+)+",
+        "",
+        texto_norm,
+    ).strip()
+    es_procedimental = bool(
+        re.match(
+            r"^(?:"
+            r"como\s+(?:se\s+)?(?:hace|hacen|hago|hacemos|registro|registra|registran|registrar|"
+            r"saco|saca|sacan|sacar|retiro|retira|retiran|retirar|despacho|despacha|despachar|"
+            r"presto|presta|prestan|prestar|ingreso|ingresa|ingresan|ingresar|"
+            r"traslado|traslada|trasladan|trasladar|devuelvo|devuelve|devuelven|devolver|"
+            r"creo|crea|crean|crear|edito|edita|editan|editar|cambio|cambia|cambian|cambiar|"
+            r"inhabilito|inhabilita|inhabilitar|desactivo|desactiva|desactivar|archivo|archiva|archivar|"
+            r"habilito|habilita|habilitar|activo|activa|activar|reactivo|reactiva|reactivar|"
+            r"dar\s+de\s+(?:alta|baja)|funciona|funcionan|"
+            r"puedo\s+(?:hacer|registrar|sacar|retirar|prestar|ingresar|trasladar|devolver|crear|editar|cambiar|inhabilitar|desactivar|archivar|habilitar|activar|reactivar|dar\s+de\s+(?:alta|baja)))\b|"
+            r"que\s+(?:necesito|se\s+necesita|requiero|se\s+requiere|datos?\s+(?:necesito|se\s+necesitan|pide|pides|requiere))\s+para\b|"
+            r"cuales?\s+son\s+los\s+(?:pasos|requisitos)\s+para\b|"
+            r"(?:pasos|instrucciones|requisitos)\s+para\b"
+            r")",
+            sin_pref,
+        )
+    )
+    if not es_procedimental:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:prestam\w*|prestar|devolucion\w*|devolver|entrad\w*|ingresar|salid\w*|dotacion\w*|"
+            r"sacar|retirar|despachar|traslad\w*|product\w*|articul\w*|referenci\w*|stock|inventario|"
+            r"almacen\w*|bodeg\w*|ubicacion\w*|categori\w*|minim\w*|inhabilit\w*|desactiv\w*|archiv\w*|habilit\w*|reactiv\w*|activ\w*|editar|crear|registrar|movimient\w*|alta|baja)\b",
+            sin_pref,
+        )
+    )
+
+
+_TOKENS_PERMISO_CAPACIDAD = {
+    "hola", "hacu", "haku", "jacu", "oye", "por", "favor",
+    "puedo", "podemos", "se", "puede", "pueden", "esta", "permitido", "es", "posible",
+    "crear", "editar", "modificar", "actualizar", "inhabilitar", "deshabilitar", "desactivar", "archivar",
+    "habilitar", "reactivar", "activar", "dar", "de", "alta", "baja", "cambiar", "ajustar",
+    "registrar", "hacer", "sacar", "retirar", "despachar", "ingresar", "meter", "trasladar", "reubicar",
+    "devolver", "prestar",
+    "un", "una", "unos", "unas", "el", "la", "los", "las", "al", "del", "en", "a",
+    "algun", "alguno", "algunos", "alguna", "algunas", "algo", "cosa", "cosas",
+    "producto", "productos", "articulo", "articulos", "referencia", "referencias", "item", "items",
+    "stock", "minimo", "umbral", "inventario", "catalogo", "almacen", "almacenes", "bodega", "bodegas",
+    "ubicacion", "ubicaciones", "prestamo", "prestamos", "entrada", "entradas", "salida", "salidas",
+    "traslado", "traslados", "devolucion", "devoluciones", "movimiento", "movimientos",
+    "sin", "permiso", "permisos", "aqui", "aca", "nuevo", "nuevos", "nueva", "nuevas",
+}
+
+
+def _es_pregunta_permiso_capacidad(texto: str) -> bool:
+    """Detecta preguntas generales de permiso o capacidad («puedo crear productos», «puedo desactivar un producto»).
+
+    Exige ausencia de códigos, cantidades y nombres concretos de productos o personas
+    (cualquier token residual fuera del vocabulario de marco invalida la coincidencia),
+    preservando consultas por producto como «se puede prestar el tornillo» o «se pueden sacar tornillos».
+    """
+    original = (texto or "").strip()
+    if not original or extraer_codigos_de_texto(original):
+        return False
+    texto_norm = normalizar(preprocesar_texto_inventario(original, normalizar_medidas=False)).strip(" ¿?¡!.,;:")
+    if not texto_norm or re.search(r"\d", texto_norm):
+        return False
+    sin_pref = re.sub(r"^(?:(?:hola|hacu|haku|jacu|oye|por\s+favor)\s+)+", "", texto_norm).strip()
+    if not re.match(
+        r"^(?:puedo|podemos|se\s+puede[n]?|esta\s+permitido|es\s+posible)\s+"
+        r"(?:crear|editar|modificar|actualizar|inhabilitar|deshabilitar|desactivar|archivar|"
+        r"habilitar|reactivar|activar|dar\s+de\s+(?:alta|baja)|cambiar|ajustar|"
+        r"registrar|hacer|sacar|retirar|despachar|ingresar|meter|trasladar|reubicar|"
+        r"devolver|prestar)\b",
+        sin_pref,
+    ):
+        return False
+    tokens = re.findall(r"[a-z0-9]+", sin_pref)
+    if not tokens or any(t not in _TOKENS_PERMISO_CAPACIDAD for t in tokens):
+        return False
+    return True
+
+
+def _es_negacion_operacion(texto: str) -> bool:
+    """Detecta prohibiciones o desistimientos explícitos («no quiero hacer ningún préstamo», «no saques nada»)."""
+    original = (texto or "").strip()
+    if not original:
+        return False
+    texto_norm = normalizar(preprocesar_texto_inventario(original, normalizar_medidas=False)).strip(" ¿?¡!.,;:")
+    if not texto_norm:
+        return False
+    sin_pref = re.sub(
+        r"^(?:(?:hola|hacu|haku|jacu|oye|por\s+favor|mejor|ya|espera|alto|para)\s+)+",
+        "",
+        texto_norm,
+    ).strip()
+    if not re.match(
+        r"^no\s+(?:quiero|deseo|voy\s+a|necesito|vayas\s+a|hagas?|haga|hagamos|"
+        r"registres?|registre|saques?|saca|retires?|retira|despaches?|despacha|"
+        r"ingreses?|ingresa|prestes?|presta|traslades?|traslada|devuelvas?|devuelve|"
+        r"crees?|crea|edites?|edita|cambies?|cambia|inhabilites?|inhabilita|habilites?|habilita)\b",
+        sin_pref,
+    ):
+        return False
+    # Si la misma frase también formula una consulta informativa («no quiero préstamo, dime cuánto stock queda»),
+    # no la interceptes aquí para dejar que se atienda la consulta.
+    if re.search(r"\b(?:consultar?|ver|dime|digame|muestr\w*|mostr\w*|list\w*|cuant[oa]s?|cuales?|donde|quien(?:es)?)\b", sin_pref):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:nada|ningun[oa]?|prestam\w*|prestar|salid\w*|dotacion\w*|sacar|saques?|retirar|retires?|"
+            r"entrad\w*|ingresar|ingreses?|traslad\w*|devolucion\w*|devolver|devuelvas?|"
+            r"product\w*|articul\w*|movimient\w*|operacion\w*|stock|cambio|cambies?|editar|edites?|crear|crees?|registrar|registres?|inhabilit\w*|habilit\w*)\b",
+            sin_pref,
+        )
+    )
+
+
+def _texto_respalda_accion_operativa(texto: str, accion: Optional[str]) -> bool:
+    """Verifica con anclaje léxico general si el texto realmente solicita esa acción operativa.
+
+    Evita que un clasificador LLM dispare mutaciones (especialmente `prestamo`) ante
+    preguntas informativas, consultas de metadatos, dudas ambiguas, preguntas de «cómo
+    hacer» o frases negadas. No depende de nombres de productos ni entidades del catálogo.
+    """
+    if not accion or accion not in ACCIONES_VALIDAS:
+        return False
+    original = (texto or "").strip()
+    if not original:
+        return False
+    if _es_pregunta_como_operar(original) or _es_pregunta_permiso_capacidad(original) or _es_negacion_operacion(original):
+        return False
+    texto_norm = normalizar(preprocesar_texto_inventario(original, normalizar_medidas=False)).strip(" ¿?¡!.,;:")
+    if not texto_norm:
+        return False
+    sin_pref = re.sub(r"^(?:(?:hola|hacu|haku|jacu|oye|por\s+favor)\s+)+", "", texto_norm).strip()
+
+    # Preguntas informativas globales, pasivas en pasado o interrogativos puros nunca disparan una mutación.
+    if re.match(
+        r"^(?:"
+        r"cual(?:es)?\b|cuant[oa]s?\b|donde\b|quien(?:es)?\b|como\b|por\s+que\b|"
+        r"hay\b|hubo\b|alguien\b|"
+        r"que\s+(?:almacen\w*|bodeg\w*|ubicacion\w*|estant\w*|categori\w*|product\w*|articul\w*|"
+        r"referenci\w*|stock|existenci\w*|prestam\w*|movimient\w*|entrad\w*|salid\w*|traslad\w*|"
+        r"devolucion\w*|hay|tenemos|existe|existen|pasa|paso|tal|falta|hace\s+falta|esta\b|se\s+\w+|ingres\w*|sal\w*|devolv\w*)\b|"
+        r"se\s+(?:puede[n]?|recib\w*|despach\w*|entreg\w*|retir\w*|ingres\w*|traslad\w*|movi\w*|devolv\w*|regres\w*|retorn\w*|agreg\w*|cre\w*|edit\w*|acabo)\b|"
+        r"(?:puedo|podemos)\s+(?:crear|editar|modificar|inhabilitar|desactivar|archivar|habilitar|activar|reactivar|sacar|retirar|ingresar|trasladar|devolver|cambiar)\s+(?:algo|cosas|productos?|un\s+producto|el\s+stock)\b|"
+        r"(?:puedo|se\s+puede)\s+.*\bsin\s+permiso\b|"
+        r"(?:quiero|necesito|deseo)\s+(?:ver|revisar|consultar|saber|conocer|buscar|listar)\b|"
+        r"(?:cambios?|modificaciones?|actualizaciones?|productos?\s+(?:nuevos?|inhabilitados?|inactivos?|archivados?|activos?)|ultimos?\s+productos?)\b|"
+        r"ya\s+(?:devolvieron|regresaron|retornaron|reintegraron|trajeron)\b|"
+        r"(?:entraron|salio|salieron|llego|llegaron)\s+(?:algo|cosas)\b"
+        r")",
+        sin_pref,
+    ):
+        return False
+
+    # Sustantivos aislados sin verbo de intención ni orden («entrada», «la salida», «cambios», «stock mínimo»)
+    # no son órdenes de mutación.
+    if re.fullmatch(
+        r"(?:(?:el|la|los|las|un|una)\s+)?(?:entrada|entradas|salida|salidas|dotacion|dotaciones|"
+        r"traslado|traslados|devolucion|devoluciones|prestamo|prestamos|cambio|cambios|"
+        r"modificacion|modificaciones|alta|altas|baja|bajas|stock\s+minimo|umbral|umbrales)",
+        sin_pref,
+    ):
+        return False
+
+    patrones_accion = {
+        "prestamo": (
+            r"\b(?:prest\w*|custod\w*|uso\s+temporal|a\s+cargo\s+de|llev\w*(?:me|lo|la|los|las)?|"
+            r"dejar\w*\s+(?:a|para|con|en\s+manos|bajo\s+custodia))\b|"
+            r"\b(?:necesit\w*|requier\w*|solicit\w*|quier[eo]\w*|dam[eo]|pasam[eo])\s+"
+            r"(?:\d+|un[oa]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|el|la|los|las)\s+"
+            r"(?!algo\b|informacion\b|ayuda\b|datos?\b|lista\b|listado\b|reporte\b|resumen\b|historial\b|"
+            r"almacen\w*\b|bodeg\w*\b|ubicacion\w*\b|estant\w*\b|categori\w*\b|ver\b|revisar\b|consultar\b|"
+            r"saber\b|hacer\b|registrar\b|salida\b|entrada\b|traslado\b|devolucion\b|duda\b|pregunta\b|momento\b)"
+        ),
+        "devolucion": (
+            r"\b(?:devolv(?:er\w*|io|ieron|i|imos|iendo|amos|emos)|devuelv(?:e|en|o|a|an|eme|elo|ela)|"
+            r"regres(?:ar|o|aron|a|an)\s+(?:el|la|los|las|un|una|\d+|su|mi)|retorn(?:ar|o|aron|e|an)|reintegr(?:ar|o|aron|e|an)|"
+            r"(?:trajo|trajeron|traje|trajimos)\s+(?:de\s+vuelta|otra\s+vez|el|la|los|las|un|una|\d+)|"
+            r"(?:hacer|haz|registrar|registra|anotar|generar|quiero|necesito|voy\s+a)\s+(?:una?\s+|la\s+)?devolucion|"
+            r"cerrar\s+(?:el\s+)?prestamo|entreg(?:o|aron|a|an)\s+de\s+vuelta)\b"
+        ),
+        "entrada": (
+            r"\b(?:ingres(?:ar|a|e|o|ame|emos|alo|ala)|met(?:er|e|a|o|elo|ela)|reabastec\w*|repon(?:er|ga|go)|"
+            r"(?:hacer|haz|registrar|registra|anotar|generar|dar|quiero|necesito|deseo|voy\s+a)\s+(?:una?\s+|la\s+)?(?:entrada|ingreso)|"
+            r"(?:sumar|agregar|subir|cargar)\s+(?:\d+|un[oa]?|stock|unidades?)|alta\s+de\s+stock)\b"
+        ),
+        "salida": (
+            r"\b(?:sac(?:ar|a|o|ue|ame|ale|e|alo|ala)|retir(?:ar|a|e|o|ame|alo|ala)|despach(?:ar|a|e|o|ame|alo|ala)|"
+            r"(?:hacer|haz|registrar|registra|anotar|generar|dar|quiero|necesito|deseo|voy\s+a)\s+(?:una?\s+|la\s+)?(?:salida|dotacion)|"
+            r"entreg(?:ar|a|ue|o|ale)\s+(?:\d+|un[oa]?|dos|tres|cuatro|cinco|el|la|los|las)|"
+            r"baja\s+de\s+stock|descont(?:ar|a|e)|rest(?:ar|a|e))\b"
+        ),
+        "traslado": (
+            r"\b(?:traslad(?:ar|a|e|o|ame|alo|ala|emos)|reubic(?:ar|a|e|o|alo|ala)|"
+            r"mov(?:er|e|a|emos|elo|ela)|muev(?:e|a|elo|ela)|"
+            r"(?:hacer|haz|registrar|registra|generar|quiero|necesito|deseo|voy\s+a)\s+(?:un\s+|el\s+)?traslado|"
+            r"(?:cambi(?:ar|a|e|alo|ala|ame|emos)|(?:quiero|necesito|deseo|voy\s+a)\s+cambiar)\s+.{0,40}\bde\s+(?:almacen|bodega|ubicacion|estante)|"
+            r"pas(?:ar|a|e|alo|ala)\s+.{0,45}\b(?:al?|hacia|para)\b)\b"
+        ),
+        "cambiar_stock_minimo": r"\b(?:minimo|umbral|alerta)\b",
+        "inhabilitar": (
+            r"\b(?:inhabilit(?:ar|a|e|o|alo|ala|ame)|deshabilit(?:ar|a|e|o|alo|ala)|"
+            r"desactiv(?:ar|a|e|o|alo|ala|ame)|archiv(?:ar|a|e|o|alo|ala)|"
+            r"(?:dar|da|de|quiero\s+dar|necesito\s+dar|voy\s+a\s+dar)\s+de\s+baja)\b"
+        ),
+        "habilitar": (
+            r"(?<!in)(?<!des)\b(?:habilit(?:ar|a|e|o|alo|ala|ame)|reactiv(?:ar|a|e|o|alo|ala)|"
+            r"activ(?:ar|a|e|o|alo|ala)|restaur(?:ar|a|e|o|alo|ala))\b"
+        ),
+        "crear_producto": (
+            r"\b(?:cre(?:ar|a|e|ame)|registr(?:ar|a|e|ame)|agreg(?:ar|a|e|ame)|anad(?:ir|e|a)|"
+            r"(?:dar|da|de)\s+de\s+alta|incorpor(?:ar|a|e)|"
+            r"(?:quiero|necesito|deseo|voy\s+a)\s+(?:un\s+)?nuev[oa]\s+(?:producto|articulo|referencia|item))\b"
+        ),
+        "editar_producto": (
+            r"\b(?:edit(?:ar|a|e|o|alo|ala|ame)|modific(?:ar|a|e|o|alo|ala|ame)|"
+            r"actualiz(?:ar|a|e|o|alo|ala|ame)|cambi(?:ar|a|e|o|alo|ala|ame)|"
+            r"correg(?:ir|i)|corrij[ae]|renombr(?:ar|a|e|o|alo|ala))\b"
+        ),
+    }
+    patron = patrones_accion.get(accion)
+    if not patron or not re.search(patron, sin_pref):
+        return False
+
+    # Si el usuario pidió explícitamente otra operación (salida/entrada/traslado/devolución)
+    # y NO mencionó préstamo, jamás respaldar `prestamo`.
+    if accion == "prestamo" and not re.search(r"\bprest\w*\b", sin_pref):
+        if re.search(r"\b(?:salid\w*|dotaci\w*|entrad\w*|traslad\w*|devoluci\w*|devolv\w*|crear\s+(?:un\s+)?(?:nuevo\s+)?producto)\b", sin_pref):
+            return False
+
+    if accion == "cambiar_stock_minimo":
+        if not re.search(r"\b(?:cambi\w*|modific\w*|ajust\w*|actualiz\w*|pon\w*|fij\w*|establec\w*|sub\w*|baj\w*)\b", sin_pref):
+            return False
+
+    return True
+
+
 def normalizar_decision_intencion_operativa(
     decision: Optional[Dict[str, Any]],
     *,
     categorias_catalogo: Optional[List[str]] = None,
     almacenes_catalogo: Optional[List[str]] = None,
     ubicaciones_catalogo: Optional[List[str]] = None,
+    texto_usuario: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Repara discordancias entre campos estructurados con anclaje al contrato y al catálogo.
+    """Repara discordancias entre campos estructurados con anclaje al contrato, al catálogo y al texto.
 
     El modelo a veces coloca un valor del enum de acción en un campo de entidad,
-    o devuelve una acción válida junto con clase ``conversacion``. Solo se
-    recupera esa discordancia cuando la clase no es ``consulta`` y el valor no
-    corresponde a una categoría real. Las entidades espaciales se conservan
-    únicamente si existen en los catálogos actuales.
+    o devuelve una acción válida junto con clase ``conversacion``. Cuando se dispone
+    de ``texto_usuario``, solo se conserva o promueve una acción operativa si el
+    mensaje realmente respalda esa familia de operación (nunca por defecto de enum
+    ni ante preguntas informativas, de procedimiento o negadas).
     """
     if not isinstance(decision, dict):
         return None
@@ -804,6 +1056,7 @@ def normalizar_decision_intencion_operativa(
     categoria = _str(normalizada.get("categoria"))
     categorias = categorias_catalogo or []
     categorias_norm = {normalizar(nombre) for nombre in categorias if nombre}
+    accion_desde_categoria = False
 
     if clase == "conversacion":
         accion_desde_categoria = bool(
@@ -817,11 +1070,20 @@ def normalizar_decision_intencion_operativa(
             accion = normalizar(categoria)
             normalizada["categoria"] = None
     if accion in ACCIONES_VALIDAS:
-        normalizada["accion"] = accion
-        if clase != "consulta":
-            clase_esperada = "formulario" if accion in ACCIONES_DE_FORMULARIO else "operacion"
-            if clase in {"conversacion", "operacion", "formulario"}:
-                normalizada["clase"] = clase_esperada
+        if texto_usuario and not _texto_respalda_accion_operativa(texto_usuario, accion):
+            normalizada["accion"] = None
+            if clase in {"operacion", "formulario"}:
+                normalizada["clase"] = (
+                    "consulta"
+                    if (_es_pregunta_como_operar(texto_usuario) or _es_pregunta_permiso_capacidad(texto_usuario))
+                    else "conversacion"
+                )
+        else:
+            normalizada["accion"] = accion
+            if clase != "consulta":
+                clase_esperada = "formulario" if accion in ACCIONES_DE_FORMULARIO else "operacion"
+                if clase in {"operacion", "formulario"} or (clase == "conversacion" and (accion_desde_categoria or bool(texto_usuario))):
+                    normalizada["clase"] = clase_esperada
 
     def resolver_catalogo(valor: Any, nombres: Optional[List[str]]) -> Optional[str]:
         candidato = _str(valor)
@@ -1754,7 +2016,7 @@ def _planificar_consulta_ubicacion_explicita(texto: str) -> Optional[PlanAgente]
         objeto = coincidencia_lugar.group(1).strip()
         objeto = re.sub(r"^(?:el|la|los|las|un|una|unos|unas)\s+", "", objeto)
         objeto = re.sub(r"^(?:producto|articulo|referencia|elemento)\s+", "", objeto).strip()
-        if objeto and normalizar(objeto) not in _TERMINOS_UBICACION_GENERICOS:
+        if objeto and normalizar(objeto) not in _TERMINOS_UBICACION_GENERICOS and normalizar(objeto) not in {"cosa", "cosas", "todo", "algo", "productos", "articulos", "materiales", "objetos"}:
             return PlanAgente(
                 tipo="consulta",
                 operacion="detalle",
@@ -3949,9 +4211,19 @@ def _verificar_intencion_listado_global(
             getattr(respuesta, "duracion_ms", 0.0) or duracion_ms
         )
 
-    if intencion == "operacion_inventario" and not _texto_menciona_verbo_mutacion(texto):
+    if intencion == "operacion_inventario" and (
+        not _texto_menciona_verbo_mutacion(texto)
+        or _es_pregunta_como_operar(texto)
+        or _es_pregunta_permiso_capacidad(texto)
+        or _es_negacion_operacion(texto)
+        or (accion_solicitada and not _texto_respalda_accion_operativa(texto, accion_solicitada))
+    ):
         telemetria.setdefault("clasificacion_listado_global", {})["operacion_descartada_sin_verbo"] = True
-        intencion = "consulta_entidad" if not sin_entidad_concreta else "consulta_inventario"
+        intencion = (
+            "capacidades"
+            if (_es_pregunta_como_operar(texto) or _es_pregunta_permiso_capacidad(texto))
+            else ("consulta_entidad" if not sin_entidad_concreta else "consulta_inventario")
+        )
 
     if intencion == "operacion_inventario":
         if accion_solicitada is None:
@@ -4347,6 +4619,25 @@ def _normalizar_intencion_conteo(texto: str, plan: PlanAgente) -> PlanAgente:
     return plan
 
 
+def _es_consulta_metadato_global(plan: PlanAgente) -> bool:
+    if plan.campos in (["categoria"], ["almacen"]) and plan.filtros.vacio():
+        return True
+    if plan.campos == ["ubicacion"] and (
+        plan.filtros.vacio()
+        or (
+            bool(plan.filtros.almacen)
+            and not plan.filtros.codigos
+            and not plan.filtros.texto
+            and not plan.filtros.categoria
+            and not plan.filtros.ubicacion
+            and not plan.filtros.condicion
+            and plan.filtros.es_prestable is None
+        )
+    ):
+        return True
+    return False
+
+
 def _normalizar_intencion_suma_unidades(
     texto: str,
     plan: PlanAgente,
@@ -4358,7 +4649,7 @@ def _normalizar_intencion_suma_unidades(
         and plan.operacion not in {"listar", "contar", "sumar_unidades", "detalle"}
     ):
         return plan
-    if plan.campos == ["categoria"] and plan.filtros.vacio():
+    if _es_consulta_metadato_global(plan):
         return plan
     entidad_individual = bool(
         plan.alcance_entidad == "producto"
@@ -5094,7 +5385,7 @@ def _normalizar_intencion_prestamo_actual(
         and plan.operacion not in {"listar", "contar", "sumar_unidades", "detalle"}
     ):
         return plan
-    if plan.campos == ["categoria"] and plan.filtros.vacio():
+    if _es_consulta_metadato_global(plan):
         return plan
     if _es_pregunta_quien_tiene_prestamo(texto):
         es_prod = bool(
@@ -6475,8 +6766,10 @@ def _aclarar_consulta_sin_entidad(
     )
     if (
         plan.operacion in {"listar", "contar"}
-        and plan.campos == ["categoria"]
-        and not es_atributo_categoria_singular
+        and (
+            (plan.campos == ["categoria"] and not es_atributo_categoria_singular)
+            or (plan.campos in (["almacen"], ["ubicacion"]) and not re.search(r"\b(?:su|sus|ese|esa|este|esta|dicho|mismo|misma)\b", texto_norm_acl))
+        )
     ):
         plan.alcance_entidad = "global"
         plan.alcance_global_confirmado = True
@@ -6923,21 +7216,22 @@ def _planificar_eventos_globales_explicitos(
     tiene_marco_consulta = bool(
         re.search(
             r"\b(?:muestr\w*|mostr\w*|enseñ\w*|ensen\w*|dime|digame|decime|decirme|dame|ver|saber|conocer|"
-            r"list\w*|consult\w*|que|cual(?:es)?|cuant[oa]s?|numero\s+de|total\s+de|cantidad\s+de|"
-            r"como\s+(?:van|estuvieron|fueron)|hubo|han\s+habido|se\s+(?:registraron|hicieron|realizaron|efectuaron|movio|movieron))\b",
+            r"list\w*|consult\w*|revis\w*|que|cual(?:es)?|cuant[oa]s?|numero\s+de|total\s+de|cantidad\s+de|"
+            r"como\s+(?:van|estuvieron|fueron)|hubo|hay|han\s+habido|"
+            r"se\s+(?:registraron|hicieron|realizaron|efectuaron|movio|movieron|despach(?:o|aron)|retir(?:o|aron)|ingres(?:o|aron)|devolv(?:io|ieron)|traslad(?:o|aron)))\b",
             texto_norm,
         )
         or re.match(
-            r"^(?:(?:los|las|el)\s+)?(?:movimientos?|historial|prestamos?|devoluciones?|entradas?|salidas?|dotaciones?|traslados?)\s+(?:de|del|en|durante)\b",
+            r"^(?:(?:los|las|el)\s+)?(?:movimientos?|historial|prestamos?|devoluciones?|entradas?|ingresos?|salidas?|dotaciones?|despachos?|retiros?|traslados?)\s+(?:de|del|en|durante|recientes?)\b",
             texto_norm,
         )
     )
     menciona_evento = bool(
         re.search(
-            r"\b(?:movimientos?|historial|prestamos?|devoluciones?|entradas?|salidas?|dotaciones?|traslados?|ajustes?|"
+            r"\b(?:movimientos?|historial|prestamos?|devoluciones?|entradas?|ingresos?|salidas?|dotaciones?|despachos?|retiros?|traslados?|ajustes?|"
             r"se\s+movi(?:o|eron)|ha\s+movido|se\s+prest(?:o|aron|a|an)|prestaron|se\s+devolv(?:io|ieron)|devolvieron|"
             r"entr(?:o|aron|a|an)|ingres(?:o|aron|a|an)|sal(?:io|ieron|e|en|ga|gan)|se\s+despach(?:o|aron|a|an)|despacharon|"
-            r"se\s+traslad(?:o|aron)|trasladaron)\b",
+            r"se\s+retir(?:o|aron)|se\s+traslad(?:o|aron)|trasladaron)\b",
             texto_norm,
         )
     )
@@ -6964,7 +7258,8 @@ def _planificar_eventos_globales_explicitos(
         if re.search(r"\b(?:prestamos?|prest(?:o|aron|a|an))\b", texto_norm):
             return None
         if not re.search(
-            r"\b(?:movimientos?|historial|devoluciones?|entradas?|salidas?|dotaciones?|traslados?)\b",
+            r"\b(?:movimientos?|historial|devoluciones?|entradas?|ingresos?|salidas?|dotaciones?|despachos?|retiros?|traslados?|"
+            r"se\s+despach(?:o|aron)|se\s+retir(?:o|aron)|se\s+ingres(?:o|aron)|se\s+traslad(?:o|aron)|se\s+devolv(?:io|ieron))\b",
             texto_norm,
         ):
             return None
@@ -7017,7 +7312,7 @@ def _planificar_eventos_globales_explicitos(
         r"\b(?:registrad[oa]s?|hech[oa]s?|realizad[oa]s?|efectuad[oa]s?|ocurrid[oa]s?|pasad[oa]s?|"
         r"recientes?|[uú]ltim[oa]s?|generales?|todos?|todas?|"
         r"favor|colabora|revisando|viendo|reg[aá]leme|h[aá]game|haceme|decime|mostrame|por\s+favor|"
-        r"bodega|almac[eé]n|inventario)\b",
+        r"ingresos?|despachos?|retiros?|bodega|almac[eé]n|inventario)\b",
         " ",
         texto_sin_alcance,
         flags=re.IGNORECASE,
@@ -7027,8 +7322,15 @@ def _planificar_eventos_globales_explicitos(
 
     fecha_desde, fecha_hasta = _fechas_intervalo_iso(intervalo) if intervalo is not None else (None, None)
     tipo_mov = _inferir_tipo_movimiento_desde_etiqueta(texto_pre, "evento", None)
-    if tipo_mov is None and re.search(r"\btraslados?\b", texto_norm):
-        tipo_mov = "TRASLADO"
+    if tipo_mov is None:
+        if re.search(r"\b(?:traslados?|se\s+traslad(?:o|aron))\b", texto_norm):
+            tipo_mov = "TRASLADO"
+        elif re.search(r"\b(?:ingresos?|entradas?|se\s+ingres(?:o|aron))\b", texto_norm):
+            tipo_mov = "ENTRADA"
+        elif re.search(r"\b(?:salidas?|dotaciones?|despachos?|retiros?|se\s+despach(?:o|aron)|se\s+retir(?:o|aron))\b", texto_norm):
+            tipo_mov = "SALIDA"
+        elif re.search(r"\b(?:devoluciones?|se\s+devolv(?:io|ieron))\b", texto_norm):
+            tipo_mov = "DEVOLUCION"
 
     es_conteo = bool(
         re.search(r"\b(?:cuant[oa]s?|numero\s+de|total\s+de|cantidad\s+de)\b", texto_norm)
@@ -7266,6 +7568,155 @@ def _planificar_categorias_globales(texto: str) -> Optional[PlanAgente]:
         alcance_entidad="global",
         alcance_global_confirmado=True,
         fuente_plan="fast_path_categorias_globales",
+    )
+
+
+_TOKENS_MARCO_ALMACENES_GLOBALES = {
+    "hola", "hacu", "haku", "jacu", "oye", "por", "favor",
+    "quiero", "necesito", "deseo", "quisiera", "me", "puedes", "podrias", "puede", "pueden",
+    "dime", "digame", "decime", "dame", "regalame", "muestrame", "mostrame", "mostrar",
+    "ensename", "ver", "saber", "conocer", "consultar", "revisar", "listar", "listame", "lista", "listado",
+    "que", "cual", "cuales", "cuanto", "cuantos", "cuanta", "cuantas", "son", "es", "estan",
+    "hay", "existe", "existen", "tenemos", "tengo", "tienen", "manejamos", "contamos", "guardamos",
+    "disponible", "disponibles", "activo", "activos", "activa", "activas",
+    "registrado", "registrados", "registrada", "registradas",
+    "asignado", "asignados", "asignada", "asignadas", "autorizado", "autorizados",
+    "actual", "actuales", "actualmente", "total", "numero", "cantidad",
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "algun", "alguno", "algunos", "alguna", "algunas",
+    "mi", "mis", "nuestro", "nuestros", "nuestra", "nuestras", "su", "todo", "todos", "todas",
+    "de", "del", "en", "con", "para", "sistema", "inventario", "catalogo", "cuenta", "cosas",
+    "almacen", "almacenes", "bodega", "bodegas",
+}
+
+_TOKENS_MARCO_UBICACIONES_GLOBALES = (
+    _TOKENS_MARCO_ALMACENES_GLOBALES
+    | {
+        "ubicacion", "ubicaciones", "estante", "estantes", "estanteria", "estanterias",
+        "vitrina", "vitrinas", "repisa", "repisas", "cajon", "cajones", "posicion", "posiciones",
+        "lugar", "lugares", "se", "guardan", "ubican", "almacenan",
+    }
+)
+
+
+def _planificar_almacenes_globales(
+    texto: str,
+    almacenes_accesibles: Optional[List[str]] = None,
+) -> Optional[PlanAgente]:
+    """Resuelve consultas globales inequívocas de listado o conteo de almacenes/bodegas."""
+    texto_pre = preprocesar_texto_inventario(texto or "", normalizar_medidas=False).strip()
+    texto_norm = normalizar(texto_pre).strip(" ¿?¡!.,;:")
+    if not texto_norm or extraer_codigos_de_texto(texto_pre):
+        return None
+    if not re.search(r"\b(?:almacen|almacenes|bodega|bodegas)\b", texto_norm):
+        return None
+    # Si nombra un almacén específico del catálogo, no es listado global de almacenes.
+    if almacenes_accesibles and _menciones_almacenes_catalogo(texto_pre, list(almacenes_accesibles)):
+        return None
+    # «en qué almacén» (singular sin verbo de existencia/listado) pregunta por un producto.
+    if re.fullmatch(r"(?:y\s+)?en\s+(?:que|cual)\s+(?:el\s+|la\s+)?(?:almacen|bodega)", texto_norm):
+        return None
+    if re.search(
+        r"\b(?:ese|esa|esos|esas|este|esta|estos|estas|dicho|mismo|misma|"
+        r"productos?|articulos?|referencias?|items?|stock|existencias?|unidades?|"
+        r"ubicacion(?:es)?|estantes?|categorias?|prestamos?|movimientos?|entradas?|salidas?|traslados?|devoluciones?|"
+        r"agotad\w*|minimo|crear|agregar|editar|modificar|eliminar|borrar|registrar|sacar|ingresar|prestar|trasladar|devolver)\b",
+        texto_norm,
+    ):
+        return None
+
+    tokens = re.findall(r"[a-z0-9]+", texto_norm)
+    if not tokens or any(t not in _TOKENS_MARCO_ALMACENES_GLOBALES for t in tokens):
+        return None
+
+    es_conteo = bool(
+        re.search(r"\b(?:cuant[oa]s|numero\s+de|total\s+de|cantidad\s+de)\s+(?:almacenes|bodegas)\b", texto_norm)
+        or re.fullmatch(
+            r"(?:hay|existen?|tenemos)\s+(?:algun(?:os?|as?)?\s+)?(?:almacenes?|bodegas?)(?:\s+(?:registrad[oa]s?|activ[oa]s?|disponibles?|asignad[oa]s?|en\s+el\s+sistema))?",
+            texto_norm,
+        )
+    )
+    es_listado = bool(
+        re.search(r"\b(?:almacenes|bodegas)\b", texto_norm)
+        or re.search(
+            r"\b(?:que|cual)\s+(?:almacen|bodega)\s+(?:hay|existe|tenemos|tengo|disponible|asignad[oa]|activ[oa])\b|"
+            r"\b(?:lista|listado)\s+de\s+(?:almacen|bodega)\b|"
+            r"\bmi\s+(?:almacen|bodega)\s+asignad[oa]\b",
+            texto_norm,
+        )
+    )
+    if not (es_conteo or es_listado):
+        return None
+    return PlanAgente(
+        tipo="consulta",
+        operacion="contar" if es_conteo else "listar",
+        referencia="ninguna",
+        campos=["almacen"],
+        alcance_entidad="global",
+        alcance_global_confirmado=True,
+        fuente_plan="fast_path_almacenes_globales",
+    )
+
+
+def _planificar_ubicaciones_globales(
+    texto: str,
+    almacenes_accesibles: Optional[List[str]] = None,
+) -> Optional[PlanAgente]:
+    """Resuelve consultas globales inequívocas de listado o conteo de ubicaciones/estantes."""
+    texto_pre = preprocesar_texto_inventario(texto or "", normalizar_medidas=False).strip()
+    texto_norm = normalizar(texto_pre).strip(" ¿?¡!.,;:")
+    if not texto_norm or extraer_codigos_de_texto(texto_pre):
+        return None
+    if not re.search(r"\b(?:ubicacion|ubicaciones|estante|estantes|estanteria|estanterias|vitrina|vitrinas|repisa|repisas)\b", texto_norm):
+        return None
+    # «en qué ubicación/estante» (singular) pregunta por el producto en foco o falta producto.
+    if re.fullmatch(r"(?:y\s+)?en\s+(?:que|cual)\s+(?:la\s+|el\s+)?(?:ubicacion|estante|estanteria|vitrina|repisa)", texto_norm):
+        return None
+    if re.search(
+        r"\b(?:su|sus|ese|esa|esos|esas|este|esta|estos|estas|dicho|mismo|misma|"
+        r"productos?|articulos?|referencias?|items?|stock|existencias?|unidades?|"
+        r"categorias?|prestamos?|movimientos?|entradas?|salidas?|traslados?|devoluciones?|"
+        r"agotad\w*|minimo|crear|agregar|editar|modificar|eliminar|borrar|registrar|sacar|ingresar|prestar|trasladar|devolver)\b",
+        texto_norm,
+    ):
+        return None
+
+    almacen_explicito = None
+    texto_para_tokens = texto_norm
+    if almacenes_accesibles:
+        almacenes_encontrados = _menciones_almacenes_catalogo(texto_pre, list(almacenes_accesibles))
+        if len(almacenes_encontrados) == 1:
+            almacen_explicito = almacenes_encontrados[0]
+            alm_norm = normalizar(almacen_explicito)
+            texto_para_tokens = re.sub(rf"(?<!\w){re.escape(alm_norm)}(?!\w)", " ", texto_para_tokens)
+        elif len(almacenes_encontrados) > 1:
+            return None
+
+    tokens = re.findall(r"[a-z0-9]+", texto_para_tokens)
+    if not tokens or any(t not in _TOKENS_MARCO_UBICACIONES_GLOBALES for t in tokens):
+        return None
+
+    es_conteo = bool(
+        re.search(r"\b(?:cuant[oa]s|numero\s+de|total\s+de|cantidad\s+de)\s+(?:ubicaciones|estantes|estanterias|vitrinas|repisas)\b", texto_norm)
+        or re.fullmatch(
+            r"(?:hay|existen?|tenemos)\s+(?:algun(?:os?|as?)?\s+)?(?:ubicacion(?:es)?|estantes?|estanterias?|vitrinas?|repisas?)(?:\s+(?:registrad[oa]s?|activ[oa]s?|disponibles?|en\s+el\s+sistema))?",
+            texto_norm,
+        )
+    )
+    es_listado = bool(
+        re.search(r"\b(?:ubicaciones|estantes|estanterias|vitrinas|repisas)\b", texto_norm)
+        or re.search(r"\b(?:lista|listado)\s+de\s+(?:ubicacion|estante)\b", texto_norm)
+    )
+    if not (es_conteo or es_listado):
+        return None
+    return PlanAgente(
+        tipo="consulta",
+        operacion="contar" if es_conteo else "listar",
+        filtros=FiltrosConsulta(almacen=almacen_explicito),
+        referencia="ninguna",
+        campos=["ubicacion"],
+        alcance_entidad="global",
+        alcance_global_confirmado=True,
+        fuente_plan="fast_path_ubicaciones_globales",
     )
 
 
@@ -7558,6 +8009,8 @@ def _planificar_prioridad_reposicion(texto: str) -> Optional[PlanAgente]:
 
 def _planificar_cambio_stock_minimo_explicito(texto: str) -> Optional[PlanAgente]:
     """Prepara una propuesta solo si acción, código y nuevo valor son explícitos."""
+    if not texto or "?" in texto or "¿" in texto or _es_negacion_operacion(texto) or _es_pregunta_como_operar(texto) or _es_pregunta_permiso_capacidad(texto):
+        return None
     texto_norm = normalizar(preprocesar_texto_inventario(texto))
     if not re.search(
         r"\b(?:cambia(?:r|do)?|modifica(?:r|do)?|ajusta(?:r|do)?|actualiza(?:r|do)?)\b",
@@ -7597,7 +8050,15 @@ def _planificar_movimiento_explicito_codigo(texto: str) -> Optional[PlanAgente]:
     texto_sin_obs, _ = separar_observacion_operacion(texto or "")
     texto_pre = preprocesar_texto_inventario(texto_sin_obs or texto or "", normalizar_medidas=False).strip()
     texto_norm = normalizar(texto_pre)
-    if not texto_norm or "?" in (texto or "") or "¿" in (texto or ""):
+    if (
+        not texto_norm
+        or "?" in (texto or "")
+        or "¿" in (texto or "")
+        or _es_negacion_operacion(texto or "")
+        or _es_pregunta_como_operar(texto or "")
+        or _es_pregunta_permiso_capacidad(texto or "")
+        or re.match(r"^(?:no|como|puedo|podemos|se\s+puede)\b", texto_norm)
+    ):
         return None
     # Nunca interceptar consultas, elegibilidad, eventos fechados ni operaciones con almacén/destinatario
     if re.search(
@@ -7673,12 +8134,24 @@ def _planificar_devolucion_determinista(texto: str) -> Optional[PlanAgente]:
     texto_sin_obs, _ = separar_observacion_operacion(texto or "")
     texto_pre = preprocesar_texto_inventario(texto_sin_obs or texto or "", normalizar_medidas=False).strip()
     texto_norm = normalizar(texto_pre)
-    if not texto_norm or "?" in (texto or "") or "¿" in (texto or ""):
+    if (
+        not texto_norm
+        or "?" in (texto or "")
+        or "¿" in (texto or "")
+        or _es_pregunta_como_operar(texto or "")
+        or _es_pregunta_permiso_capacidad(texto or "")
+        or _es_negacion_operacion(texto or "")
+    ):
         return None
-    # Exclusiones estrictas: preguntas, consultas históricas, reportes o estados de préstamo
+    # Exclusiones estrictas: preguntas (incluso sin signos ¿? por transcripción de voz),
+    # pronombres indefinidos («alguien», «algo»), pasivas impersonales, reportes históricos o estados
     if re.search(
-        r"^(?:que|cuant[oa]s?|cuales?|quien(?:es)?|donde|como|muestr\w*|mostr\w*|list\w*|dime|digame|consult\w*|ver|dame\s+(?:los|las)\s+devoluciones)\b|"
-        r"\b(?:hubo|movimientos?\s+de\s+devolucion|historial|se\s+puede\s+devolver|es\s+retornable|retornables?|"
+        r"^(?:que|cuant[oa]s?|cuales?|quien(?:es)?|donde|como|puedo|podemos|se\s+puede[n]?|alguien|hay|no\b|"
+        r"ya\s+(?:devolvieron|regresaron|retornaron|reintegraron|trajeron)|"
+        r"muestr\w*|mostr\w*|list\w*|dime|digame|consult\w*|ver|dame\s+(?:los|las)\s+devoluciones)\b|"
+        r"\b(?:hubo|alguien|movimientos?\s+de\s+devolucion|historial|se\s+puede[n]?\s+devolver|es\s+retornable|retornables?|"
+        r"se\s+(?:devolv\w*|regres\w*|retorn\w*|reintegr\w*)|"
+        r"(?:devolv\w*|devuelv\w*|regres\w*|retorn\w*|reintegr\w*|trajo|trajeron)\s+(?:algo|cosas|nada)|"
         r"sin\s+devolver|no\s+(?:han?\s+|lo\s+han?\s+|me\s+han?\s+)?devuelto|pendientes?\s+de\s+devolucion|falta(?:n)?\s+(?:por\s+)?devolver|por\s+devolver|"
         r"ayer|anteayer|esta\s+semana|este\s+mes|mes\s+pasado|semana\s+pasada)\b",
         texto_norm,
@@ -7861,7 +8334,13 @@ def _planificar_operacion_anaforica_foco(texto: str, estado: Any) -> Optional[Pl
     """Resuelve operaciones explícitas con anáfora clara sobre un foco único («Ingresa 5 de ese», «Saca 3 de esos para Juan»)."""
     if estado is None or not texto:
         return None
-    if "?" in texto or "¿" in texto:
+    if (
+        "?" in texto
+        or "¿" in texto
+        or _es_negacion_operacion(texto)
+        or _es_pregunta_como_operar(texto)
+        or _es_pregunta_permiso_capacidad(texto)
+    ):
         return None
     codigo_foco = getattr(estado, "producto_codigo", None)
     if not codigo_foco:
@@ -7917,17 +8396,32 @@ def _planificar_operacion_anaforica_foco(texto: str, estado: Any) -> Optional[Pl
 
 
 def _planificar_operacion_sin_producto_ni_anafora(texto: str) -> Optional[PlanAgente]:
-    """Enruta deterministamente aperturas operativas sin producto ni anáfora para evitar fuga de foco."""
-    if not texto or "?" in texto or "¿" in texto:
+    """Enruta deterministamente aperturas operativas sin producto ni anáfora para evitar fuga de foco.
+
+    Exige un verbo explícito de intención («quiero/necesito/voy a...») o de ejecución
+    («hacer/registrar/generar...») para que un sustantivo aislado («entrada», «la salida»,
+    «traslado», «préstamo», «devolución») jamás abra un movimiento por accidente.
+    """
+    if (
+        not texto
+        or "?" in texto
+        or "¿" in texto
+        or _es_negacion_operacion(texto)
+        or _es_pregunta_como_operar(texto)
+        or _es_pregunta_permiso_capacidad(texto)
+    ):
         return None
     texto_pre = preprocesar_texto_inventario(texto or "", normalizar_medidas=False).strip()
     if extraer_codigos_de_texto(texto_pre) or tiene_referencia_contextual_operacion(texto_pre):
         return None
     texto_norm = normalizar(texto_pre).strip(" .,:;!¡?¿")
     m_op = re.fullmatch(
-        r"(?:(?:quiero|necesito|deseo|voy\s+a|quisiera|por\s+favor)\s+)*"
-        r"(?:hacer|registrar|generar|crear|realizar|anotar|dar)?\s*"
-        r"(?:un|una|el|la)?\s*"
+        r"(?:(?:por\s+favor|hacu|haku|oye)\s+)*"
+        r"(?:"
+        r"(?:quiero|necesito|deseo|voy\s+a|quisiera)\s+(?:(?:hacer|registrar|generar|crear|realizar|anotar|dar)\s+)?"
+        r"|(?:hacer|haz(?:me)?|haga(?:me)?|registrar|registra|generar|genera|crear|crea|realizar|realiza|anotar|dar)\s+"
+        r")"
+        r"(?:(?:un|una|el|la)\s+)?"
         r"(prestamo|devolucion|entrada|salida|traslado)(?:\s+(?:de\s+stock|de\s+inventario|al\s+inventario|del\s+inventario))?",
         texto_norm,
     )
@@ -7963,17 +8457,31 @@ def planificar_determinista(
     texto_pre = preprocesar_texto_inventario(texto).strip()
     txt_norm = normalizar(texto_pre)
 
-    # 1. Capacidades o funciones generales del agente
-    if _es_pregunta_capacidades_agente(texto_pre) or re.search(
-        r"^(?:qu[eé]\s+(?:puedes\s+hacer|haces|sabes\s+hacer|funciones\s+tienes)|"
-        r"en\s+qu[eé]\s+(?:me\s+)?puedes\s+ayudar|cu[aá]les\s+son\s+tus\s+funciones|"
-        r"para\s+qu[eé]\s+sirves|ayuda(?:\s+por\s+favor)?|qu[eé]\s+es\s+ha[ck]u)\b",
-        txt_norm,
+    # 1. Capacidades, funciones, preguntas procedimentales o de permiso general
+    if (
+        _es_pregunta_capacidades_agente(texto_pre)
+        or _es_pregunta_como_operar(texto_pre)
+        or _es_pregunta_permiso_capacidad(texto_pre)
+        or re.search(
+            r"^(?:qu[eé]\s+(?:puedes\s+hacer|haces|sabes\s+hacer|funciones\s+tienes)|"
+            r"en\s+qu[eé]\s+(?:me\s+)?puedes\s+ayudar|cu[aá]les\s+son\s+tus\s+funciones|"
+            r"para\s+qu[eé]\s+sirves|ayuda(?:\s+por\s+favor)?|qu[eé]\s+es\s+ha[ck]u)\b",
+            txt_norm,
+        )
     ):
         return PlanAgente(
             tipo="capacidades",
             referencia="ninguna",
             fuente_plan="fast_path_capacidades",
+        )
+
+    # 1b. Prohibición o desistimiento explícito de operación («no quiero hacer ningún préstamo», «no saques nada»)
+    if _es_negacion_operacion(texto_pre):
+        return PlanAgente(
+            tipo="aclaracion",
+            referencia="ninguna",
+            pregunta="Entendido, no se realizará ninguna operación en el inventario. ¿Desea consultar algún dato?",
+            fuente_plan="fast_path_negacion_operacion",
         )
 
     # 2. Fuera de dominio / conocimiento general no inventariable
@@ -8110,6 +8618,20 @@ def planificar_determinista(
     plan_categorias_globales = _planificar_categorias_globales(texto_pre)
     if plan_categorias_globales is not None:
         return plan_categorias_globales
+
+    plan_almacenes_globales = _planificar_almacenes_globales(
+        texto_pre,
+        almacenes_accesibles=almacenes_accesibles,
+    )
+    if plan_almacenes_globales is not None:
+        return plan_almacenes_globales
+
+    plan_ubicaciones_globales = _planificar_ubicaciones_globales(
+        texto_pre,
+        almacenes_accesibles=almacenes_accesibles,
+    )
+    if plan_ubicaciones_globales is not None:
+        return plan_ubicaciones_globales
 
     plan_listado_global = _planificar_listado_global_explicito(texto_pre)
     if plan_listado_global is not None:
@@ -8305,9 +8827,9 @@ def planificar_determinista(
             fuente_plan="fast_path_elegibilidad_positiva",
         )
     tokens_mensaje = txt_norm.split()
-    if 1 <= len(tokens_mensaje) <= 5:
+    if 1 <= len(tokens_mensaje) <= 7:
         nucleo = re.sub(
-            r"^(?:(?:hacu|jacu|oye|por\s+favor)\s+)?(?:(?:ver|mostrar|muestrame|dame|dime|consultar|revisar|listar|listame|pasame|buscar|buscame|ensename|cuales\s+son)\s+)?(?:(?:todo\s+el|todos\s+los|todas\s+las|el|la|los|las|un|una|unos|unas)\s+)?",
+            r"^(?:(?:hacu|haku|jacu|oye|por\s+favor)\s+)?(?:(?:quiero|necesito|deseo|quisiera|me\s+puedes)\s+)?(?:(?:ver|mostrar|muestrame|dame|dime|consultar|revisar|saber\s+cuales\s+son|listar|listame|pasame|buscar|buscame|ensename|cuales\s+son)\s+)?(?:(?:todo\s+el|todos\s+los|todas\s+las|el|la|los|las|un|una|unos|unas|mis)\s+)?",
             "",
             txt_norm,
         ).strip()
@@ -8412,8 +8934,9 @@ def planificar_determinista(
             )
         _mapa_mov_corto = {
             "movimiento": None, "movimientos": None, "historial": None, "actividad": None,
-            "entrada": "ENTRADA", "entradas": "ENTRADA",
-            "salida": "SALIDA", "salidas": "SALIDA",
+            "entrada": "ENTRADA", "entradas": "ENTRADA", "ingreso": "ENTRADA", "ingresos": "ENTRADA",
+            "salida": "SALIDA", "salidas": "SALIDA", "dotacion": "SALIDA", "dotaciones": "SALIDA",
+            "despacho": "SALIDA", "despachos": "SALIDA", "retiro": "SALIDA", "retiros": "SALIDA",
             "traslado": "TRASLADO", "traslados": "TRASLADO",
             "devolucion": "DEVOLUCION", "devoluciones": "DEVOLUCION",
         }
@@ -8960,28 +9483,42 @@ def validar_plan(
 
     # Corrige una clase equivocada del LLM solo cuando el mensaje empieza con
     # una orden inequívoca. La operación sigue pasando por propuesta y confirmación.
-    acciones_explicitas = (
-        ("entrada", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:ingresar|ingresa|ingrese|registrar\s+(?:una\s+)?entrada|dar\s+entrada|meter)\b"),
-        ("salida", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:registrar\s+(?:una\s+)?salida|sacar|retirar|despachar)\b"),
-        ("prestamo", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:prestar|pr[eé]sta(?:r|s|me|le|lo|la|los|las|les)?|pr[eé]ste(?:n|me|le|lo|la|los|las|les)?|pr[eé]sten|pr[eé]stamo)\b"),
-        ("devolucion", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:devolver|registrar\s+(?:una\s+)?devoluci[oó]n)\b"),
-        ("traslado", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:trasladar|hacer\s+(?:un\s+)?traslado)\b"),
-        ("crear_producto", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:crear|registrar)\s+(?:un\s+)?(?:nuevo\s+)?(?:producto|art[ií]culo)\b"),
-    )
-    for accion_explicita, patron_explicito in acciones_explicitas:
-        if re.search(patron_explicito, txt_low):
-            tipo = "operacion"
-            datos["accion"] = accion_explicita
-            break
-
-    # Anti-alucinación de operaciones (mutaciones): requiere verbo o sustantivo de acción explícito en el texto
-    if tipo == "operacion":
-        mut_verb = re.search(
-            r"\b(pr[eé]st|devolv|devuelv|devolu|ingres|entrad|sac[aáeio]|salid|retir|traslad|cambi|modifi|actuali|inhabilit|deshabilit|habilit|crea|registr|alta|nuev)",
-            txt_low,
+    if (
+        not _es_pregunta_como_operar(texto_pre)
+        and not _es_pregunta_permiso_capacidad(texto_pre)
+        and not _es_negacion_operacion(texto_pre)
+    ):
+        acciones_explicitas = (
+            ("entrada", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:ingresar|ingresa|ingrese|registrar\s+(?:una\s+)?entrada|dar\s+entrada|meter)\b"),
+            ("salida", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:registrar\s+(?:una\s+)?salida|sacar|retirar|despachar)\b"),
+            ("prestamo", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:prestar|pr[eé]sta(?:r|s|me|le|lo|la|los|las|les)?|pr[eé]ste(?:n|me|le|lo|la|los|las|les)?|pr[eé]sten|pr[eé]stamo)\b"),
+            ("devolucion", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:devolver|registrar\s+(?:una\s+)?devoluci[oó]n)\b"),
+            ("traslado", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:trasladar|hacer\s+(?:un\s+)?traslado)\b"),
+            ("crear_producto", r"^(?:(?:por\s+favor|quiero|necesito)\s+)*(?:crear|registrar)\s+(?:un\s+)?(?:nuevo\s+)?(?:producto|art[ií]culo)\b"),
         )
-        if not mut_verb:
+        for accion_explicita, patron_explicito in acciones_explicitas:
+            if re.search(patron_explicito, txt_low):
+                tipo = "operacion"
+                datos["accion"] = accion_explicita
+                break
+
+    # Anti-alucinación de operaciones (mutaciones): requiere respaldo real para la acción solicitada
+    if tipo == "operacion":
+        accion_plan_cand = _str(datos.get("accion"))
+        if _es_pregunta_como_operar(texto_pre) or _es_pregunta_permiso_capacidad(texto_pre):
+            tipo = "capacidades"
+            datos["accion"] = None
+        elif _es_negacion_operacion(texto_pre):
             tipo = "aclaracion"
+            datos["accion"] = None
+        else:
+            mut_verb = re.search(
+                r"\b(pr[eé]st|devolv|devuelv|devolu|ingres|entrad|sac[aáeio]|salid|retir|traslad|cambi|modifi|actuali|inhabilit|deshabilit|habilit|crea|registr|alta|nuev)",
+                txt_low,
+            )
+            if not mut_verb or (accion_plan_cand in ACCIONES_VALIDAS and not _texto_respalda_accion_operativa(texto_pre, accion_plan_cand)):
+                tipo = "aclaracion"
+                datos["accion"] = None
     tokens_usuario_base = set(tokens_significativos(texto_pre)) | set(txt_norm.split())
     tokens_usuario: set[str] = set(tokens_usuario_base)
     for u in list(tokens_usuario_base):

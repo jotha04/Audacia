@@ -906,9 +906,13 @@ def _clasificar_turno_con_operacion_pendiente(texto: str, op_pendiente: dict | N
         re.search(
             r"\b("
             r"cu[aá]nt[oa]s?|d[oó]nde\s+est[aá]|d[oó]nde\s+se\s+encuentra|d[oó]nde\s+queda|"
-            r"en\s+qu[eé]\s+(?:ubicaci[oó]n|estante|almac[eé]n|bodega|categor[ií]a)|"
-            r"cu[aá]l\s+es\s+(?:su|la|el)\s+(?:ubicaci[oó]n|stock|c[oó]digo|categor[ií]a)|"
-            r"qu[eé]\s+(?:stock|ubicaci[oó]n|ubicaciones|productos?|referencias?|categor[ií]as?|entradas?|salidas?|movimientos?|pr[eé]stamos?|devoluciones?|traslados?)|"
+            r"en\s+qu[eé]\s+(?:ubicaci[oó]n|ubicaciones|estantes?|almac[eé]n|almacenes|bodegas?|categor[ií]as?)|"
+            r"cu[aá]l\s+es\s+(?:su|la|el)\s+(?:ubicaci[oó]n|stock|c[oó]digo|categor[ií]a|almac[eé]n)|"
+            r"cu[aá]les?\s+(?:son|hay|existen|tenemos|est[aá]n)|"
+            r"qu[eé]\s+(?:stock|ubicaci[oó]n|ubicaciones|estantes?|almac[eé]n|almacenes|bodegas?|productos?|referencias?|categor[ií]as?|entradas?|salidas?|movimientos?|pr[eé]stamos?|devoluciones?|traslados?)|"
+            r"(?:lista|listado)\s+de\s+(?:almacenes|bodegas|ubicaciones|estantes|categor[ií]as|productos|pr[eé]stamos|movimientos|entradas|salidas|traslados|devoluciones)|"
+            r"(?:mis\s+)?(?:almacenes|bodegas)\s+(?:asignad[oa]s?|disponibles?|del\s+sistema|activ[oa]s?)|"
+            r"(?:quiero|necesito)\s+(?:ver|revisar|consultar|saber)\b|"
             r"qui[eé]n(?:es)?\s+(?:lo\s+|la\s+|los\s+|las\s+)?tiene(?:n)?|a\s+qui[eé]n\s+est[aá]\s+prest|"
             r"hay\s+disponibles?|quedan?\s+disponibles?|"
             r"stock\s+(?:actual|disponible|de|del|en)|existencias?\s+(?:de|del|en)|"
@@ -918,7 +922,7 @@ def _clasificar_turno_con_operacion_pendiente(texto: str, op_pendiente: dict | N
             r"ficha\s+de|informaci[oó]n\s+de|detalles?\s+de|"
             r"antes\s+dime|primero\s+dime|dime\s+(?:cu[aá]nt[oa]s?|d[oó]nde|qu[eé]|cu[aá]l|qui[eé]n|si\s+)|"
             r"mu[eé]strame|mostrame|m[aáeé]s?trame|b[uú]scame|consulta(?:r)?\s+(?:el\s+stock|la\s+ubicaci[oó]n|cu[aá]nto|los\s+movimientos?)|"
-            r"saber\s+(?:cu[aá]nt[oa]s?|d[oó]nde|qu[eé]|si\s+)|revisa(?:r)?\s+cu[aá]nt[oa]s?|"
+            r"saber\s+(?:cu[aá]nt[oa]s?|d[oó]nde|qu[eé]|cu[aá]l(?:es)?|si\s+)|revisa(?:r)?\s+cu[aá]nt[oa]s?|"
             r"(?:entradas?|salidas?|movimientos?|pr[eé]stamos?|devoluciones?|traslados?)\s+(?:hubo|de\s+hoy|de\s+ayer|de\s+esta\s+semana|de\s+este\s+mes)"
             r")\b",
             t_clean,
@@ -927,16 +931,16 @@ def _clasificar_turno_con_operacion_pendiente(texto: str, op_pendiente: dict | N
     if tiene_patron_consulta or (
         tiene_signo_pregunta
         and re.search(
-            r"\b(hay|quedan?|queda|tiene|tienen|est[aá]|est[aá]n|disponibles?|stock|ubicaci[oó]n|almac[eé]n|"
-            r"prestable|pr[eé]stable|consumible|retornable|prestar|qui[eé]n|cu[aá]nt[oa]s?|d[oó]nde|cu[aá]l|qu[eé]|"
-            r"entradas?|salidas?|movimientos?|pr[eé]stamos?|categor[ií]a|c[oó]digo)\b",
+            r"\b(hay|quedan?|queda|tiene|tienen|est[aá]|est[aá]n|disponibles?|stock|ubicaci[oó]n|ubicaciones|estantes?|almac[eé]n|almacenes|bodegas?|"
+            r"prestable|pr[eé]stable|consumible|retornable|prestar|qui[eé]n|cu[aá]nt[oa]s?|d[oó]nde|cu[aá]l(?:es)?|qu[eé]|"
+            r"entradas?|salidas?|movimientos?|pr[eé]stamos?|categor[ií]as?|c[oó]digo)\b",
             t_clean,
         )
     ):
         return "consulta_intermedia"
 
     # 3. Nueva operación explícita (de tipo distinto, o un comando completo nuevo que reinicia el flujo)
-    if not re.match(r"^(?:qu[eé]|cu[aá]nt[oa]s?|cu[aá]les?)\b", t_clean):
+    if not re.match(r"^(?:qu[eé]|cu[aá]nt[oa]s?|cu[aá]les?|c[oó]mo|puedo|podemos|se\s+puede[n]?|no\s+(?:quiero|deseo|hagas?|saques?|retires?|ingreses?|registres?|prestes?|traslades?|devuelvas?))\b", t_clean):
         tipo_actual = str(op_pendiente.get("tipo") or "").upper()
         mapa_nuevas_ops = [
             ("REGISTRAR_ENTRADA", r"\b(?:quiero\s+|voy\s+a\s+|mejor\s+)?(?:(?:registr[aeoó]\w*|gener[aeoó]\w*|hac(?:er|e)|da(?:r|me)|cre[aeoó]\w*)\s+(?:una?\s+)?entrada|ingres[aeoó]\w*\s+(?:stock|\d+|un[oa]?\b|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez))\b"),
@@ -2495,12 +2499,26 @@ def _procesar_comando_inventario_interno(
             intencion = int_slot
 
     # 0-bis. Acciones administrativas explícitas sobre producto en foco/pronombre sin propuesta activa
-    if intencion is None and not propuesta_activa:
-        es_accion_inhab = bool(
+    if intencion is None and not propuesta_activa and "?" not in texto and "¿" not in texto:
+        from .agente.planificador import (
+            _es_negacion_operacion,
+            _es_pregunta_como_operar,
+            _es_pregunta_permiso_capacidad,
+        )
+        es_consulta_o_negacion_admin = bool(
+            _es_pregunta_como_operar(texto)
+            or _es_pregunta_permiso_capacidad(texto)
+            or _es_negacion_operacion(texto)
+            or re.match(
+                r"^(?:c[oó]mo|qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|qui[eé]n(?:es)?|d[oó]nde|puedo|podemos|se\s+puede[n]?|no)\b",
+                texto_lower.strip(),
+            )
+        )
+        es_accion_inhab = (not es_consulta_o_negacion_admin) and bool(
             re.search(r"\b(?:quiero\s+|deseo\s+|voy\s+a\s+|lo\s+quiero\s+)?(?:ir\s+a\s+)?(?:inhabilitar|desactivar|archivar|dar\s+de\s+baja)\b", texto_lower)
             or re.search(r"\b(?:inhabilit[aá]r?lo|desact[ií]v[aá]r?lo|arch[ií]v[aá]r?lo|inhabil[ií]talo|desact[ií]valo|arch[ií]valo)\b", texto_lower)
         )
-        es_accion_hab = bool(
+        es_accion_hab = (not es_consulta_o_negacion_admin) and bool(
             re.search(r"\b(?:quiero\s+|deseo\s+|voy\s+a\s+|lo\s+quiero\s+)?(?:ir\s+a\s+)?(?:habilitar|activar|reactivar)\b", texto_lower)
             or re.search(r"\b(?:habilit[aá]r?lo|activ[aá]r?lo|reactiv[aá]r?lo|hab[ií]l[ií]talo|act[ií]valo|react[ií]valo)\b", texto_lower)
         )
