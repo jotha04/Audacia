@@ -1,0 +1,119 @@
+{
+  "version": "1.3.0",
+  "perfil_predeterminado": "servidor_12b",
+  "servicio": {
+    "host": "127.0.0.1",
+    "puerto": 8080,
+    "url_salud": "http://127.0.0.1:8080/health",
+    "url_modelos": "http://127.0.0.1:8080/v1/models",
+    "url_chat": "http://127.0.0.1:8080/v1/chat/completions"
+  },
+  "perfiles": {
+    "servidor_12b": {
+      "descripcion": "Perfil principal para despliegue con modelo Llama 12B GGUF (autodetección de GPU CUDA/Vulkan y archivo .gguf en models/)",
+      "gpu_device": "auto",
+      "modelo_archivo": "auto",
+      "modelo_ruta_relativa": "models/",
+      "cuantizacion": "Q4_K_M",
+      "n_ctx": 8192,
+      "n_gpu_layers": 99,
+      "n_batch": 512,
+      "n_threads": 8,
+      "flash_attn": true,
+      "kv_8bits": true,
+      "speculative_decoding": {
+        "enabled": true,
+        "type": "ngram-simple",
+        "ngram_simple_size_n": 12,
+        "ngram_simple_size_m": 48,
+        "ngram_simple_min_hits": 1
+      },
+      "parallel": 2,
+      "max_cola": 8,
+      "timeout_cola": 30,
+      "presupuesto_vram_esperado_mb": 8500,
+      "temperatura_defecto": 0.3,
+      "top_p_defecto": 0.9,
+      "max_tokens_defecto": 512
+    },
+    "servidor_rtx5070ti": {
+      "descripcion": "Servidor central institucional (NVIDIA RTX 5070 Ti - 16 GB VRAM)",
+      "gpu_device": "CUDA0",
+      "modelo_archivo": "auto",
+      "modelo_ruta_relativa": "models/",
+      "cuantizacion": "Q4_K_M",
+      "n_ctx": 16384,
+      "n_gpu_layers": 99,
+      "n_batch": 512,
+      "n_threads": 12,
+      "flash_attn": true,
+      "kv_8bits": true,
+      "speculative_decoding": {
+        "enabled": true,
+        "type": "ngram-simple",
+        "ngram_simple_size_n": 12,
+        "ngram_simple_size_m": 48,
+        "ngram_simple_min_hits": 1
+      },
+      "parallel": 2,
+      "max_cola": 8,
+      "timeout_cola": 30,
+      "presupuesto_vram_esperado_mb": 9500,
+      "temperatura_defecto": 0.3,
+      "top_p_defecto": 0.9,
+      "max_tokens_defecto": 1024
+    },
+    "desarrollo_rtx2000ada": {
+      "descripcion": "Entorno de desarrollo local (NVIDIA RTX 2000 Ada - 8 GB VRAM)",
+      "gpu_device": "CUDA0",
+      "modelo_archivo": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "modelo_ruta_relativa": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "cuantizacion": "Q4_K_M",
+      "n_ctx": 8192,
+      "n_gpu_layers": 33,
+      "n_batch": 512,
+      "n_threads": 8,
+      "flash_attn": true,
+      "kv_8bits": true,
+      "speculative_decoding": {
+        "enabled": true,
+        "type": "ngram-simple",
+        "ngram_simple_size_n": 12,
+        "ngram_simple_size_m": 48,
+        "ngram_simple_min_hits": 1
+      },
+      "parallel": 1,
+      "presupuesto_vram_esperado_mb": 5700,
+      "temperatura_defecto": 0.3,
+      "top_p_defecto": 0.9,
+      "max_tokens_defecto": 512
+    },
+    "desarrollo_rx7600": {
+      "descripcion": "Entorno local AMD Radeon RX 7600 (8 GB VRAM) mediante Vulkan",
+      "gpu_device": "Vulkan0",
+      "modelo_archivo": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "modelo_ruta_relativa": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "cuantizacion": "Q4_K_M",
+      "n_ctx": 8192,
+      "n_gpu_layers": 33,
+      "n_batch": 512,
+      "n_threads": 8,
+      "flash_attn": true,
+      "kv_8bits": true,
+      "speculative_decoding": {
+        "enabled": false,
+        "type": "ngram-simple",
+        "ngram_simple_size_n": 12,
+        "ngram_simple_size_m": 48,
+        "ngram_simple_min_hits": 1
+      },
+      "parallel": 2,
+      "max_cola": 8,
+      "timeout_cola": 30,
+      "presupuesto_vram_esperado_mb": 5700,
+      "temperatura_defecto": 0.3,
+      "top_p_defecto": 0.9,
+      "max_tokens_defecto": 512
+    }
+  }
+}

@@ -1,0 +1,66 @@
+# ==============================================================================
+# AudacIA — .gitignore
+# ==============================================================================
+
+# Entornos virtuales y cachés de Python
+.venv/
+.venv-anterior-*/
+.venv_visitante/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Secretos y configuración local
+.env
+*.pem
+*.key
+
+# Modelos LLM, embeddings y voces (descargados localmente en cada PC)
+models/*.gguf
+models/*.bin
+models/voz/
+models/piper/
+models/whisper/
+!models/.gitkeep
+*.onnx
+*.onnx.json
+*.zip
+.cache/
+
+# Binarios nativos descargables de llama-server y CUDA
+cerebro_audacia/proveedor_modelo/bin/
+*.exe
+*.dll
+
+# Bases de datos, backups, índices vectoriales y archivos generados en ejecución
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+*.bak*
+*.pristine
+*.sha256
+*.wav
+*.log
+chroma_db/
+logs/
+cerebro_audacia/proveedor_modelo/llama_server_estado.json
+sistema_inventario/backups/
+sistema_inventario/certificados/
+sistema_inventario/certs/
+sistema_inventario/staticfiles/
+sistema_inventario/media/
+
+# Editores y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,18 @@
+# Dependencias reales del runtime de HACU.
+# llama-cpp-python se instala aparte con soporte CUDA (ver Dockerfile / entorno local):
+#   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+llama-cpp-python>=0.3.0
+chromadb>=0.5.0
+langchain-text-splitters>=0.3.0
+
+# Embeddings multilingues del RAG. NO es opcional: con el embedding por defecto de
+# Chroma (entrenado en ingles) la recuperacion sobre el corpus en espanol baja de
+# 36/36 a 35/36 consultas. Medido con `python -m pruebas.recuperacion --n 6`.
+# La diferencia se estrecho con el rescate lexico (hacu/lexico.py), que no
+# depende del idioma del embedding; aun asi el multilingue sigue siendo el que
+# entiende las preguntas que no nombran lo que buscan.
+sentence-transformers>=3.0.0
+
+# La voz (microfono, reconocimiento y sintesis) y la ventana grafica van en
+# requirements-voz.txt y requirements-ui.txt. Son opcionales a proposito: el
+# nucleo de HACU tiene que poder arrancar en una maquina sin tarjeta de sonido.

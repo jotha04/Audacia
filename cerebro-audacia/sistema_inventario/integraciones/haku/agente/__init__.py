@@ -1,0 +1,45 @@
+"""Agente HAKU Inventario: planificación con el Cerebro Central + herramientas de lectura."""
+
+from .agente import METRICAS_AGENTE, AgenteInventarioHaku, SalidaAgente
+from .contrato import (
+    AccionFormulario,
+    AccionMutacion,
+    CondicionFiltro,
+    DatosFormularioHaku,
+    DatosMutacionHaku,
+    FamiliaIntencion,
+    FiltrosConsultaHaku,
+    OperacionConsulta,
+    PlanHaku,
+    ReferenciaContextual,
+    SubtipoConversacion,
+    adaptar_plan_agente_a_plan_haku,
+    adaptar_plan_haku_a_extraccion_semantica,
+    adaptar_plan_haku_a_intencion_resultado,
+    adaptar_plan_haku_a_plan_agente,
+    obtener_metricas_prompt_canonico,
+    validar_plan_haku,
+)
+
+__all__ = [
+    "AgenteInventarioHaku",
+    "SalidaAgente",
+    "METRICAS_AGENTE",
+    "PlanHaku",
+    "FamiliaIntencion",
+    "OperacionConsulta",
+    "AccionMutacion",
+    "AccionFormulario",
+    "SubtipoConversacion",
+    "CondicionFiltro",
+    "ReferenciaContextual",
+    "FiltrosConsultaHaku",
+    "DatosMutacionHaku",
+    "DatosFormularioHaku",
+    "validar_plan_haku",
+    "adaptar_plan_haku_a_plan_agente",
+    "adaptar_plan_haku_a_extraccion_semantica",
+    "adaptar_plan_haku_a_intencion_resultado",
+    "adaptar_plan_agente_a_plan_haku",
+    "obtener_metricas_prompt_canonico",
+]

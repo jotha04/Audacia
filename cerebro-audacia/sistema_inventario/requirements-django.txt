@@ -1,0 +1,11 @@
+# Dependencias del proyecto Django y Servidor ASGI HTTPS — Inventario AudacIA
+# Instalar con: pip install -r requirements-django.txt
+
+Django>=4.2,<5.0
+uvicorn>=0.30
+cryptography>=42.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+django-extensions>=3.2
+openpyxl>=3.1.2
+numpy>=1.26

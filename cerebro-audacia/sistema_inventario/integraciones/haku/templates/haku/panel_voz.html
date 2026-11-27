@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Hacu Inventario{% endblock %}
+{% block page_title %}Hacu Inventario{% endblock %}
+{% block sidebar_haku %}active{% endblock %}
+{% block sidebar_haku_aria %}aria-current="page"{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/haku_panel.css' %}?v=20261126-ui-v6">
+{% endblock %}
+
+{% block content %}
+<section class="haku-workspace" aria-label="Asistente conversacional Hacu Inventario">
+    <header class="haku-toolbar">
+        <div class="haku-quick-chips" role="group" aria-label="Consultas rápidas">
+            <button type="button" class="haku-chip" data-haku-comando="¿Qué productos tienen bajo stock?">
+                Bajo stock
+            </button>
+            <button type="button" class="haku-chip" data-haku-comando="¿Cuáles préstamos están activos?">
+                Préstamos activos
+            </button>
+            <button type="button" class="haku-chip" data-haku-comando="¿Qué productos están agotados?">
+                Agotados
+            </button>
+            <button type="button" class="haku-chip" data-haku-comando="¿Qué movimientos hubo hoy?">
+                Movimientos hoy
+            </button>
+        </div>
+
+        <div class="haku-toolbar-meta">
+            <span class="haku-scope-pill" title="{{ almacen_detalle }}">{{ almacen }}</span>
+            {% if puede_crear_producto %}
+            <button type="button" class="haku-btn-nuevo" id="haku-btn-abrir-crear">
+                + Nuevo producto
+            </button>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="chat-feed" id="haku-chat-feed" role="log" aria-live="polite" aria-label="Conversación con Hacu Inventario">
+        <article class="haku-msg haku-msg-haku">
+            <div class="msg-header">
+                <span class="msg-sender">Hacu Inventario</span>
+                <span class="msg-time">Ahora</span>
+            </div>
+            <div class="msg-body">
+                Hola. Mantén pulsada la tecla <kbd class="kbd-key">Espacio</kbd>, toca el micrófono o escribe tu consulta de inventario.
+            </div>
+        </article>
+    </div>
+
+    <div class="propuesta-card" id="haku-propuesta-card"></div>
+
+    <footer class="chat-controls">
+        <div class="voice-action-bar">
+            <button type="button" class="mic-btn" id="haku-btn-mic" aria-label="Activar micrófono">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="22"></line>
+                </svg>
+            </button>
+
+            <div class="voice-status-info">
+                <div class="voice-status-label" id="haku-status-label" aria-live="polite">
+                    Presiona Espacio o toca el micrófono para hablar
+                </div>
+                <div class="voice-status-hint">
+                    Mantén pulsado <kbd class="kbd-key">Espacio</kbd> para dictar
+                </div>
+            </div>
+
+            <div class="wave-visualizer" id="haku-wave-container" aria-hidden="true">
+                <span class="wave-bar"></span>
+                <span class="wave-bar"></span>
+                <span class="wave-bar"></span>
+                <span class="wave-bar"></span>
+                <span class="wave-bar"></span>
+            </div>
+        </div>
+
+        <div class="input-row">
+            <label class="haku-sr-only" for="haku-input-texto">Escribe un comando o consulta de inventario</label>
+            <input type="text" class="input-text" id="haku-input-texto" placeholder="Escribe un comando o consulta de inventario..." autocomplete="off">
+            <button type="button" class="btn btn-enviar" id="haku-btn-enviar">Enviar</button>
+        </div>
+    </footer>
+</section>
+
+<div id="haku-toasts" class="haku-toasts" role="status" aria-live="polite"></div>
+
+{% if puede_crear_producto %}
+{{ crear_producto_datos|json_script:"haku-crear-producto-datos" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/haku_voz.js' %}?v=20261127-ui-v14" defer></script>
+{% endblock %}

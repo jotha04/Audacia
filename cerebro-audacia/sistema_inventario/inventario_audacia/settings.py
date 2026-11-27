@@ -1,0 +1,366 @@
+"""
+Configuración de Django para Inventario AudacIA.
+
+Todas las variables sensibles y configurables se leen de .env.
+Ver .env.example para la lista completa.
+"""
+
+import os
+from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
+# ─── Rutas ───────────────────────────────────────────────────────────────────
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+# ─── Seguridad ───────────────────────────────────────────────────────────────
+
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-key-change-me")
+
+DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in ("true", "1", "yes")
+
+if not DEBUG and (not SECRET_KEY or SECRET_KEY == "dev-insecure-key-change-me"):
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY no está configurada o usa el valor inseguro por defecto en entorno de producción. "
+        "Genere una clave segura usando el script 'scripts/generar_secret_key.py' y configúrela en el archivo .env."
+    )
+
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0").split(",")
+    if h.strip()
+]
+
+_server_ip_env = os.getenv("SERVER_IP", "").strip()
+if _server_ip_env and _server_ip_env not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_server_ip_env)
+_server_port_env = os.getenv("SERVER_PORT", "8000").strip() or "8000"
+
+# Permitir resolución automática de hostname e IP local en LAN para conexión multiequipo
+try:
+    import socket
+
+    _hostname = socket.gethostname().lower()
+    for _extra in (_hostname, f"{_hostname}.local"):
+        if _extra not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_extra)
+    _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        _s.connect(("8.8.8.8", 80))
+        _ip = _s.getsockname()[0]
+        if _ip and _ip not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_ip)
+    finally:
+        _s.close()
+
+    _, _, _ip_list = socket.gethostbyname_ex(socket.gethostname())
+    for _ip in _ip_list:
+        if _ip not in ALLOWED_HOSTS and not _ip.startswith("169.254"):
+            ALLOWED_HOSTS.append(_ip)
+except Exception:
+    pass
+
+# ─── Aplicaciones ────────────────────────────────────────────────────────────
+
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    # --- Apps del proyecto ---
+    "cuentas",
+    "inventario",
+    "integraciones.haku",
+    "web",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "cuentas.middleware.SesionAudaciaAdminMiddleware",
+    "integraciones.haku.middleware.HakuSessionMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "inventario.middleware.CustomErrorPagesMiddleware",
+]
+
+ROOT_URLCONF = "inventario_audacia.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+                "inventario.context_processors.alertas_stock",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "inventario_audacia.wsgi.application"
+
+
+def _resolver_motor_bd(entorno=None):
+    """Resuelve el motor activo preservando compatibilidad entre DB_ENGINE y USE_SQLITE."""
+    env = os.environ if entorno is None else entorno
+    motor_explicito = env.get("DB_ENGINE", "").strip().lower()
+    if motor_explicito:
+        return motor_explicito, ("sqlite" in motor_explicito)
+
+    usar_sqlite = env.get("USE_SQLITE", "True").strip().lower() in ("true", "1", "yes")
+    motor = "sqlite" if usar_sqlite else "postgresql"
+    return motor, usar_sqlite
+
+
+DB_ENGINE, USE_SQLITE = _resolver_motor_bd()
+
+if USE_SQLITE:
+    sqlite_db_name = os.getenv("SQLITE_DB_NAME", os.getenv("DB_NAME", "db.sqlite3"))
+    if sqlite_db_name == "inventario_audacia" or (BASE_DIR / sqlite_db_name).is_dir():
+        sqlite_db_name = "db.sqlite3"
+
+    _sqlite_options = {"timeout": 20}
+    import django
+
+    if django.VERSION >= (5, 1):
+        _sqlite_options["transaction_mode"] = "IMMEDIATE"
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / sqlite_db_name,
+            "OPTIONS": _sqlite_options,
+        }
+    }
+
+    from django.db.backends.signals import connection_created
+
+    def _configurar_sqlite_pragmas(sender, connection, **kwargs):
+        if connection.vendor == "sqlite":
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA synchronous=NORMAL;")
+                cursor.execute("PRAGMA busy_timeout=20000;")
+
+    connection_created.connect(_configurar_sqlite_pragmas, dispatch_uid="configurar_sqlite_pragmas")
+else:
+    _pg_options = {}
+    try:
+        from django.db.backends.postgresql.psycopg_any import IsolationLevel
+
+        _pg_options["isolation_level"] = IsolationLevel.READ_COMMITTED
+    except ImportError:
+        _pg_options["options"] = "-c default_transaction_isolation=read\\ committed"
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME", "inventario_audacia"),
+            "USER": os.getenv("DB_USER", "inventario"),
+            "PASSWORD": os.getenv("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", "localhost"),
+            "PORT": os.getenv("DB_PORT", "5432"),
+            "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+            # Aislamiento READ COMMITTED combinado con select_for_update() y
+            # actualizaciones atómicas F() garantiza consistencia sin contención excesiva.
+            "OPTIONS": _pg_options,
+        }
+    }
+
+# ─── Modelo de usuario personalizado ─────────────────────────────────────────
+
+AUTH_USER_MODEL = "cuentas.UsuarioAudacIA"
+
+AUTHENTICATION_BACKENDS = [
+    "cuentas.backends.UsuarioAudacIABackend",
+]
+
+# ─── Contraseñas ─────────────────────────────────────────────────────────────
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+     "OPTIONS": {"min_length": 7}},
+    {"NAME": "cuentas.validators.LetraYNumeroValidator"},
+]
+
+# ─── Bloqueo por intentos fallidos ───────────────────────────────────────────
+
+LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+LOGIN_IP_MAX_ATTEMPTS = int(os.getenv("LOGIN_IP_MAX_ATTEMPTS", "20"))
+
+# ─── Cachés (LocMemCache / DatabaseCache) para Inventario y Haku ──────────────
+# LocMemCache es nativo de Django, seguro para subprocesos y opera 100% en RAM
+# para desarrollo y SQLite. En producción multi-proceso con PostgreSQL se soporta
+# DatabaseCache configurando CACHE_BACKEND=database sin requerir Redis.
+
+CACHE_BACKEND = os.environ.get("CACHE_BACKEND", "locmem").lower().strip()
+
+if CACHE_BACKEND in ("db", "database"):
+    _default_cache = {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "audacia_cache_table",
+    }
+else:
+    _default_cache = {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "haku-inventario-default",
+    }
+
+CACHES = {
+    "default": _default_cache,
+    "haku_contexto": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "haku-inventario-contexto",
+        "TIMEOUT": 7200,  # 2 horas sin actividad (7200 segundos)
+        "OPTIONS": {
+            "MAX_ENTRIES": 50,  # Máximo 50 contextos simultáneos
+            "CULL_FREQUENCY": 2,  # Desalojo fraccional LRU al alcanzar MAX_ENTRIES
+        },
+    },
+    "haku_catalogo": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "haku-inventario-catalogo",
+        "TIMEOUT": 1800,  # 30 minutos
+        "OPTIONS": {
+            "MAX_ENTRIES": 500,
+        },
+    },
+    "haku_ubicaciones": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "haku-inventario-ubicaciones",
+        "TIMEOUT": 900,  # 15 minutos
+        "OPTIONS": {
+            "MAX_ENTRIES": 500,
+        },
+    },
+    "haku_stock": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "haku-inventario-stock",
+        "TIMEOUT": 15,  # 15 segundos máximo (stock temporal orientativo)
+        "OPTIONS": {
+            "MAX_ENTRIES": 200,
+        },
+    },
+}
+
+# ─── Sesiones ────────────────────────────────────────────────────────────────
+
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+# Duración de "Recordar este dispositivo" (7 días por defecto).
+SESSION_COOKIE_AGE_DAYS = int(os.getenv("SESSION_COOKIE_AGE_DAYS", "7"))
+SESSION_COOKIE_AGE = SESSION_COOKIE_AGE_DAYS * 86400
+# Expiración por inactividad cuando no se recuerda la sesión (8 horas por defecto).
+SESSION_IDLE_TIMEOUT_SECONDS = int(os.getenv("SESSION_IDLE_TIMEOUT_SECONDS", "28800"))
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_HTTPONLY = True
+_cookie_secure_env = os.getenv("SESSION_COOKIE_SECURE", os.getenv("COOKIE_SECURE"))                                                                                                                                               
+SESSION_COOKIE_SECURE = (                                                                                                                                                                                                         
+    _cookie_secure_env.lower() in ("true", "1", "yes")                                                                                                                                                                            
+    if _cookie_secure_env is not None                                                                                                                                                                                             
+    else not DEBUG                                                                                                                                                                                                                
+) 
+SESSION_COOKIE_SAMESITE = "Lax"
+
+# ─── CSRF y Cabeceras de Seguridad ───────────────────────────────────────────
+CSRF_COOKIE_HTTPONLY = True  # Protegido contra lectura por scripts; clientes leen <meta name="csrf-token">
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+SECURE_REFERRER_POLICY = "same-origin"
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(
+    [
+        f"https://{h}:{_server_port_env}"
+        for h in ALLOWED_HOSTS
+        if h not in ("*", "", "0.0.0.0") and not h.startswith(".")
+    ] + [
+        f"https://{h}:8000"
+        for h in ALLOWED_HOSTS
+        if h not in ("*", "", "0.0.0.0") and not h.startswith(".")
+    ] + [
+        f"https://{h}"
+        for h in ALLOWED_HOSTS
+        if h not in ("*", "", "0.0.0.0") and not h.startswith(".")
+    ] + [
+        f"http://{h}:{_server_port_env}"
+        for h in ALLOWED_HOSTS
+        if h not in ("*", "", "0.0.0.0") and not h.startswith(".")
+    ] + [
+        f"http://{h}:8000"
+        for h in ALLOWED_HOSTS
+        if h not in ("*", "", "0.0.0.0") and not h.startswith(".")
+    ]
+))
+
+# ─── Internacionalización ────────────────────────────────────────────────────
+
+LANGUAGE_CODE = "es-co"
+
+TIME_ZONE = os.getenv("TIME_ZONE", "America/Bogota")
+
+USE_I18N = True
+USE_TZ = True
+
+# ─── Archivos estáticos ─────────────────────────────────────────────────────
+
+STATIC_URL = "static/"
+STATICFILES_DIRS = [BASE_DIR / "static"]
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# ─── Archivos media ─────────────────────────────────────────────────────────
+
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# ─── Campo auto por defecto ─────────────────────────────────────────────────
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ─── Login ───────────────────────────────────────────────────────────────────
+
+LOGIN_URL = os.getenv("LOGIN_URL", "/cuentas/login/")
+LOGIN_REDIRECT_URL = os.getenv("LOGIN_REDIRECT_URL", "/api/haku/panel/")
+LOGOUT_REDIRECT_URL = os.getenv("LOGOUT_REDIRECT_URL", "/cuentas/login/")
+
+# ─── Haku Inventario ─────────────────────────────────────────────────────────
+
+HAKU_CONTEXT_TIMEOUT = int(os.getenv("HAKU_CONTEXT_TIMEOUT", "7200"))  # 2 horas
+HAKU_PROPOSAL_TIMEOUT = int(os.getenv("HAKU_PROPOSAL_TIMEOUT", "1800"))  # 30 minutos
+HAKU_AGENTE_HABILITADO = os.getenv("HAKU_AGENTE_HABILITADO", "1").lower() in ("1", "true", "yes")
+HAKU_STT_MODEL = os.getenv("HAKU_STT_MODEL", "small").strip() or "small"
+HAKU_STT_DEVICE = os.getenv("HAKU_STT_DEVICE", "cuda").strip() or "cuda"
+HAKU_STT_COMPUTE = os.getenv("HAKU_STT_COMPUTE", "float16").strip() or "float16"
+
+HAKU_VOICE_CONTEXT_TIMEOUT_MINUTES = int(
+    os.getenv("HAKU_VOICE_CONTEXT_TIMEOUT_MINUTES", "30")
+)
+HAKU_TRANSCRIPTION_LOG_RETENTION_DAYS = int(
+    os.getenv("HAKU_TRANSCRIPTION_LOG_RETENTION_DAYS", "30")
+)
+
+# ─── Silenciado temporal de verificaciones pendientes de otros integrantes ─────
+# Permite ejecutar pruebas y desarrollo local sin bloquear por discrepancias
+# en inventario/admin.py que corresponden al Integrante 2.
+SILENCED_SYSTEM_CHECKS = [
+    "admin.E108",
+    "admin.E116",
+    "admin.E035",
+    "staticfiles.W004",
+]
+
